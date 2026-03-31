@@ -50,20 +50,20 @@ function saveState() {
         symbols.forEach(s => {
             const st = state[s.name];
             toSave[s.name] = {
-                lastSignal:          st.lastSignal,
-                lastScoreAlert:      st.lastScoreAlert,
-                consecutiveSL:       st.consecutiveSL,
-                blocked:             st.blocked,
-                lastMoveAlert:       st.lastMoveAlert,
-                cooldownUntil:       st.cooldownUntil,
-                activeTrade:         st.activeTrade ? {
+                lastSignal:         st.lastSignal,
+                lastScoreAlert:     st.lastScoreAlert,
+                consecutiveSL:      st.consecutiveSL,
+                blocked:            st.blocked,
+                lastMoveAlert:      st.lastMoveAlert,
+                cooldownUntil:      st.cooldownUntil,
+                activeTrade:        st.activeTrade ? {
                     type:      st.activeTrade.type,
                     entry:     st.activeTrade.entry,
                     tp:        st.activeTrade.tp,
                     sl:        st.activeTrade.sl,
                     reducedSL: st.activeTrade.reducedSL,
                 } : null,
-                tradeConfirmStatus:  st.activeTrade ? st.tradeConfirmStatus : "NONE",
+                tradeConfirmStatus: st.activeTrade ? st.tradeConfirmStatus : "NONE",
             };
         });
         fs.writeFileSync(STATE_FILE, JSON.stringify(toSave, null, 2));
@@ -95,9 +95,9 @@ const symbols = [
 // ─────────────────────────────────────────────
 // ⚡ CONFIG
 // ─────────────────────────────────────────────
-const MOVE_THRESHOLD  = 0.02;           // 2% mouvement brusque
-const MOVE_CANDLES    = 2;              // sur 2 bougies
-const COOLDOWN_MS = 30 * 60 * 1000; // 30min cooldown après fermeture
+const MOVE_THRESHOLD = 0.02;             // 2% mouvement brusque
+const MOVE_CANDLES   = 2;               // sur 2 bougies 1H
+const COOLDOWN_MS    = 30 * 60 * 1000; // 30min cooldown après fermeture
 
 // ─────────────────────────────────────────────
 // 📡 API FUTURES
@@ -169,16 +169,19 @@ function rsiWasAbove(closes, threshold, lookback = 3, period = 6) {
     return false;
 }
 
-async function getTrend4H(symbol) {
+// ─────────────────────────────────────────────
+// 🕐 TENDANCE 2H (confirmation pour trades 1H)
+// ─────────────────────────────────────────────
+async function getTrend2H(symbol) {
     try {
-        const candles = await fetchKlines(symbol, "4h", 120);
+        const candles = await fetchKlines(symbol, "2h", 120);
         const closes  = candles.map(x => parseFloat(x[4]));
         const ma7     = MA(closes, 7);
         const ma25    = MA(closes, 25);
-        const rsi4h   = RSI(closes, 6);
+        const rsi2h   = RSI(closes, 6);
         if (!ma7 || !ma25) return "NEUTRAL";
-        if (ma7 > ma25 && rsi4h < 65) return "BULL";
-        if (ma7 < ma25 && rsi4h > 35) return "BEAR";
+        if (ma7 > ma25 && rsi2h < 65) return "BULL";
+        if (ma7 < ma25 && rsi2h > 35) return "BEAR";
         return "NEUTRAL";
     } catch {
         return "NEUTRAL";
@@ -223,14 +226,14 @@ const state = {};
 symbols.forEach(s => {
     const saved = savedState[s.name] || {};
     state[s.name] = {
-        lastSignal:          saved.lastSignal          || null,
-        lastScoreAlert:      saved.lastScoreAlert      || false,
-        consecutiveSL:       saved.consecutiveSL       || 0,
-        blocked:             saved.blocked             || false,
-        lastMoveAlert:       saved.lastMoveAlert       || null,
-        cooldownUntil:       saved.cooldownUntil       || 0,
-        activeTrade:         saved.activeTrade         || null,
-        tradeConfirmStatus:  saved.tradeConfirmStatus  || "NONE",
+        lastSignal:         saved.lastSignal         || null,
+        lastScoreAlert:     saved.lastScoreAlert     || false,
+        consecutiveSL:      saved.consecutiveSL      || 0,
+        blocked:            saved.blocked            || false,
+        lastMoveAlert:      saved.lastMoveAlert      || null,
+        cooldownUntil:      saved.cooldownUntil      || 0,
+        activeTrade:        saved.activeTrade        || null,
+        tradeConfirmStatus: saved.tradeConfirmStatus || "NONE",
     };
 });
 
@@ -309,7 +312,7 @@ bot.on("callback_query", async (query) => {
         s.tradeConfirmStatus = "CLOSED";
         s.cooldownUntil      = Date.now() + COOLDOWN_MS;
         saveState();
-        await send(`🔒 *${symbol}* — Trade fermé. Cooldown 2H avant prochain signal.`);
+        await send(`🔒 *${symbol}* — Trade fermé. Cooldown 30min avant prochain signal.`);
     }
 
     if (action === "EXIT" && choice === "YES") {
@@ -563,7 +566,8 @@ async function analyze(symbolObj) {
         const rsiOversold   = rsiWasBelow(closedCloses, 30, 3);
         const rsiOverbought = rsiWasAbove(closedCloses, 80, 3);
 
-        const trend4H = await getTrend4H(symbol);
+        // ── Tendance 2H ───────────────────────
+        const trend2H = await getTrend2H(symbol);
 
         // ── Score ─────────────────────────────
         let score = 0;
@@ -576,10 +580,10 @@ async function analyze(symbolObj) {
             if (ma7 > ma25 && ma25 > ma99) score += 10;
             if (ma7 < ma25 && ma25 < ma99) score += 10;
         }
-        if ((trend4H === "BULL" && rsiOversold) ||
-            (trend4H === "BEAR" && rsiOverbought)) score += 10;
+        if ((trend2H === "BULL" && rsiOversold) ||
+            (trend2H === "BEAR" && rsiOverbought)) score += 10;
 
-        console.log(`\n🔍 ${symbol} [1H] | RSI: ${rsi.toFixed(1)} | Vol: ${Math.round(lastVolume)} | 4H: ${trend4H} | Score: ${score}`);
+        console.log(`\n🔍 ${symbol} [1H] | RSI: ${rsi.toFixed(1)} | Vol: ${Math.round(lastVolume)} | 2H: ${trend2H} | Score: ${score}`);
 
         // ── Alerte opportunité ────────────────
         if (score >= 60 && !s.lastScoreAlert) {
@@ -590,7 +594,7 @@ async function analyze(symbolObj) {
 
 Score: ${score}%
 RSI 1H: ${rsi.toFixed(1)}
-Tendance 4H: ${trend4H === "BULL" ? "🟢 Haussière" : trend4H === "BEAR" ? "🔴 Baissière" : "⚪ Neutre"}
+Tendance 2H: ${trend2H === "BULL" ? "🟢 Haussière" : trend2H === "BEAR" ? "🔴 Baissière" : "⚪ Neutre"}
 Volume: ${Math.round(lastVolume)}
 MA7: ${ma7?.toFixed(2)} | MA25: ${ma25?.toFixed(2)} | MA99: ${ma99?.toFixed(2)}
 
@@ -601,17 +605,16 @@ MA7: ${ma7?.toFixed(2)} | MA25: ${ma25?.toFixed(2)} | MA99: ${ma99?.toFixed(2)}
 
         // ─────────────────────────────────────────────
         // 🚀 SIGNAL LONG
-        // ✅ Fix contradiction : RSI actuel doit être < 65
-        // Évite un LONG quand RSI vient de monter à 82
+        // ✅ Fix : RSI actuel < 65 — évite contradiction
         // ─────────────────────────────────────────────
         if (
             rsiOversold         &&
-            rsi < 65            && // ✅ FIX — RSI actuel pas trop haut
+            rsi < 65            &&
             macdBull            &&
             lastVolume > sigVol &&
             bullishCandle       &&
             score >= 60         &&
-            trend4H !== "BEAR"
+            trend2H !== "BEAR"
         ) {
             if (s.lastSignal !== "LONG") {
                 s.lastSignal         = "LONG";
@@ -630,7 +633,7 @@ Bougie 1H fermée ✅
 
 Prix entrée: \`${entry.toFixed(2)}\`
 RSI 1H: ${rsi.toFixed(1)} | Score: ${score}%
-Tendance 4H: 🟢 ${trend4H}
+Tendance 2H: 🟢 ${trend2H}
 Volume: ${Math.round(lastVolume)}
 MA7: ${ma7?.toFixed(2)} | MA25: ${ma25?.toFixed(2)} | MA99: ${ma99?.toFixed(2)}
 
@@ -645,12 +648,11 @@ _Le bot surveille et t'alertera avec boutons_`
 
         // ─────────────────────────────────────────────
         // 📉 SIGNAL SHORT
-        // ✅ Fix contradiction : RSI actuel doit être > 35
-        // Évite un SHORT quand RSI vient de baisser à 8
+        // ✅ Fix : RSI actuel > 35 — évite contradiction
         // ─────────────────────────────────────────────
         else if (
             rsiOverbought       &&
-            rsi > 35            && // ✅ FIX — RSI actuel pas trop bas
+            rsi > 35            &&
             macdBear            &&
             lastVolume > sigVol &&
             bearishCandle       &&
@@ -673,7 +675,7 @@ Bougie 1H fermée ✅
 
 Prix entrée: \`${entry.toFixed(2)}\`
 RSI 1H: ${rsi.toFixed(1)} | Score: ${score}%
-Tendance 4H: 🔴 ${trend4H}
+Tendance 2H: 🔴 ${trend2H}
 Volume: ${Math.round(lastVolume)}
 MA7: ${ma7?.toFixed(2)} | MA25: ${ma25?.toFixed(2)} | MA99: ${ma99?.toFixed(2)}
 
@@ -731,7 +733,7 @@ bot.onText(/\/close (.+)/, (msg, match) => {
         state[sym].tradeConfirmStatus = "CLOSED";
         state[sym].cooldownUntil      = Date.now() + COOLDOWN_MS;
         saveState();
-        send(`🔒 *${sym}* — Trade ${trade.type} fermé manuellement. Cooldown 2H.`);
+        send(`🔒 *${sym}* — Trade ${trade.type} fermé manuellement. Cooldown 30min.`);
     } else {
         send(`❌ Aucun trade actif sur *${sym}*.`);
     }
@@ -741,8 +743,8 @@ bot.onText(/\/status/, (msg) => {
     if (msg.chat.id.toString() !== CHAT_ID) return;
     let txt = "📊 *Statut des paires*\n\n";
     symbols.forEach(s => {
-        const st    = state[s.name];
-        const trade = st.activeTrade;
+        const st         = state[s.name];
+        const trade      = st.activeTrade;
         const inCooldown = Date.now() < st.cooldownUntil;
         const remaining  = inCooldown
             ? ` | ⏳ ${Math.round((st.cooldownUntil - Date.now()) / 60000)}min`
@@ -776,11 +778,11 @@ send(
 `🤖 *Bot Futures lancé — Timeframe 1H*
 
 ✅ Fix contradiction LONG/SHORT
-✅ Cooldown 2H après fermeture
+✅ Cooldown 30min après fermeture
 ✅ Fix 409 — polling robuste
 ✅ Sauvegarde état automatique
 ✅ Alertes mouvements brusques ±2%
-✅ Confirmation tendance 4H
+✅ Confirmation tendance 2H
 ✅ TP +2.0% | SL -1.5% | R/R 1.3
 ✅ Boutons YES / NO interactifs
 ✅ 12 paires Futures scannées
