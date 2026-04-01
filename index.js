@@ -50,20 +50,21 @@ function saveState() {
         symbols.forEach(s => {
             const st = state[s.name];
             toSave[s.name] = {
-                lastSignal:         st.lastSignal,
-                lastScoreAlert:     st.lastScoreAlert,
-                consecutiveSL:      st.consecutiveSL,
-                blocked:            st.blocked,
-                lastMoveAlert:      st.lastMoveAlert,
-                cooldownUntil:      st.cooldownUntil,
-                activeTrade:        st.activeTrade ? {
+                lastSignal:          st.lastSignal,
+                lastScoreAlert:      st.lastScoreAlert,
+                consecutiveSL:       st.consecutiveSL,
+                blocked:             st.blocked,
+                lastMoveAlert:       st.lastMoveAlert,
+                cooldownUntil:       st.cooldownUntil,
+                lastEarlyAlert:      st.lastEarlyAlert,
+                activeTrade:         st.activeTrade ? {
                     type:      st.activeTrade.type,
                     entry:     st.activeTrade.entry,
                     tp:        st.activeTrade.tp,
                     sl:        st.activeTrade.sl,
                     reducedSL: st.activeTrade.reducedSL,
                 } : null,
-                tradeConfirmStatus: st.activeTrade ? st.tradeConfirmStatus : "NONE",
+                tradeConfirmStatus:  st.activeTrade ? st.tradeConfirmStatus : "NONE",
             };
         });
         fs.writeFileSync(STATE_FILE, JSON.stringify(toSave, null, 2));
@@ -97,7 +98,7 @@ const symbols = [
 // ─────────────────────────────────────────────
 const MOVE_THRESHOLD = 0.02;             // 2% mouvement brusque
 const MOVE_CANDLES   = 2;               // sur 2 bougies 1H
-const COOLDOWN_MS    = 30 * 60 * 1000; // 30min cooldown après fermeture
+const COOLDOWN_MS    = 30 * 60 * 1000; // 30min cooldown
 
 // ─────────────────────────────────────────────
 // 📡 API FUTURES
@@ -170,7 +171,7 @@ function rsiWasAbove(closes, threshold, lookback = 3, period = 6) {
 }
 
 // ─────────────────────────────────────────────
-// 🕐 TENDANCE 2H (confirmation pour trades 1H)
+// 🕐 TENDANCE 2H
 // ─────────────────────────────────────────────
 async function getTrend2H(symbol) {
     try {
@@ -226,21 +227,90 @@ const state = {};
 symbols.forEach(s => {
     const saved = savedState[s.name] || {};
     state[s.name] = {
-        lastSignal:         saved.lastSignal         || null,
-        lastScoreAlert:     saved.lastScoreAlert     || false,
-        consecutiveSL:      saved.consecutiveSL      || 0,
-        blocked:            saved.blocked            || false,
-        lastMoveAlert:      saved.lastMoveAlert      || null,
-        cooldownUntil:      saved.cooldownUntil      || 0,
-        activeTrade:        saved.activeTrade        || null,
-        tradeConfirmStatus: saved.tradeConfirmStatus || "NONE",
+        lastSignal:          saved.lastSignal          || null,
+        lastScoreAlert:      saved.lastScoreAlert      || false,
+        consecutiveSL:       saved.consecutiveSL       || 0,
+        blocked:             saved.blocked             || false,
+        lastMoveAlert:       saved.lastMoveAlert       || null,
+        cooldownUntil:       saved.cooldownUntil       || 0,
+        lastEarlyAlert:      saved.lastEarlyAlert      || null, // "LONG" | "SHORT" | null
+        activeTrade:         saved.activeTrade         || null,
+        tradeConfirmStatus:  saved.tradeConfirmStatus  || "NONE",
     };
 });
 
 console.log("💾 État chargé depuis state.json");
 
 // ─────────────────────────────────────────────
-// ⚡ ALERTE MOUVEMENT BRUSQUE
+// 🟡 ALERTE PRÉCOCE — mouvement qui s'enclenche
+// Détecte le début du mouvement AVANT le signal
+// LONG précoce : RSI croise 35 à la hausse
+// SHORT précoce : RSI croise 65 à la hausse
+// ─────────────────────────────────────────────
+async function checkEarlyAlert(symbol, closedCloses, rsi, macdData, lastClose) {
+    const s = state[symbol];
+
+    // Pas d'alerte précoce si trade déjà actif
+    if (s.activeTrade) return;
+
+    const macdCurr   = macdData.macdLine.at(-1);
+    const macdPrev   = macdData.macdLine.at(-2);
+    const signalCurr = macdData.signalLine.at(-1);
+    const signalPrev = macdData.signalLine.at(-2);
+
+    const rsiPrev = RSI(closedCloses.slice(0, -1), 6);
+
+    // ── Alerte précoce LONG ───────────────────
+    // RSI vient de passer sous 35 (baisse forte qui commence)
+    // MACD commence à diverger positivement
+    const rsiCrossingOversold = rsiPrev > 35 && rsi <= 35;
+    const macdTurningBull     = macdCurr > macdPrev; // MACD remonte
+
+    if (rsiCrossingOversold && s.lastEarlyAlert !== "LONG") {
+        s.lastEarlyAlert = "LONG";
+        saveState();
+        await send(
+`🟡 *MOUVEMENT BAISSIER EN COURS — ${symbol}*
+
+RSI vient de passer sous 35 → *${rsi.toFixed(1)}*
+Prix actuel: \`${lastClose.toFixed(2)}\`
+MACD: ${macdCurr.toFixed(4)}
+
+⚡ Mouvement de baisse qui s'enclenche
+👀 *Surveille un signal LONG si RSI < 30 + MACD croise*`
+        );
+        return;
+    }
+
+    // ── Alerte précoce SHORT ──────────────────
+    // RSI vient de passer au-dessus de 65 (hausse forte qui commence)
+    const rsiCrossingOverbought = rsiPrev < 65 && rsi >= 65;
+    const macdTurningBear       = macdCurr < macdPrev; // MACD commence à baisser
+
+    if (rsiCrossingOverbought && s.lastEarlyAlert !== "SHORT") {
+        s.lastEarlyAlert = "SHORT";
+        saveState();
+        await send(
+`🟡 *MOUVEMENT HAUSSIER EN COURS — ${symbol}*
+
+RSI vient de passer au-dessus de 65 → *${rsi.toFixed(1)}*
+Prix actuel: \`${lastClose.toFixed(2)}\`
+MACD: ${macdCurr.toFixed(4)}
+
+⚡ Mouvement de hausse qui s'enclenche
+👀 *Surveille un signal SHORT si RSI > 80 + MACD croise*`
+        );
+        return;
+    }
+
+    // Reset alerte précoce si RSI revient en zone neutre
+    if (rsi > 40 && rsi < 60) {
+        s.lastEarlyAlert = null;
+    }
+}
+
+// ─────────────────────────────────────────────
+// ⚡ ALERTE MOUVEMENT BRUSQUE (±2% sur 2 bougies)
 // ─────────────────────────────────────────────
 async function checkSuddenMove(symbol, closedCloses, rsi) {
     const s = state[symbol];
@@ -491,7 +561,6 @@ async function analyze(symbolObj) {
         return;
     }
 
-    // ✅ Cooldown actif — on attend
     if (Date.now() < s.cooldownUntil) {
         const remaining = Math.round((s.cooldownUntil - Date.now()) / 60000);
         console.log(`⏳ ${symbol} — Cooldown actif (${remaining} min restantes)`);
@@ -535,8 +604,11 @@ async function analyze(symbolObj) {
         const bullishCandle = lastClose > lastOpen;
         const bearishCandle = lastClose < lastOpen;
 
-        // ⚡ Mouvement brusque EN PREMIER
+        // ⚡ 1 — Mouvement brusque ±2%
         await checkSuddenMove(symbol, closedCloses, rsi);
+
+        // 🟡 2 — Alerte précoce (mouvement qui s'enclenche)
+        await checkEarlyAlert(symbol, closedCloses, rsi, macdData, lastClose);
 
         // ── Trade actif → gestion ─────────────
         if (s.activeTrade) {
@@ -562,12 +634,9 @@ async function analyze(symbolObj) {
         if (isRange)  { console.log(`⏸ ${symbol} — Range`);     return; }
         if (pumpDump) { console.log(`⏸ ${symbol} — Pump/dump`); return; }
 
-        // ── Fenêtre RSI ───────────────────────
         const rsiOversold   = rsiWasBelow(closedCloses, 30, 3);
         const rsiOverbought = rsiWasAbove(closedCloses, 80, 3);
-
-        // ── Tendance 2H ───────────────────────
-        const trend2H = await getTrend2H(symbol);
+        const trend2H       = await getTrend2H(symbol);
 
         // ── Score ─────────────────────────────
         let score = 0;
@@ -603,10 +672,7 @@ MA7: ${ma7?.toFixed(2)} | MA25: ${ma25?.toFixed(2)} | MA99: ${ma99?.toFixed(2)}
         }
         if (score < 50) s.lastScoreAlert = false;
 
-        // ─────────────────────────────────────────────
-        // 🚀 SIGNAL LONG
-        // ✅ Fix : RSI actuel < 65 — évite contradiction
-        // ─────────────────────────────────────────────
+        // ── Signal LONG ───────────────────────
         if (
             rsiOversold         &&
             rsi < 65            &&
@@ -646,10 +712,7 @@ _Le bot surveille et t'alertera avec boutons_`
             }
         }
 
-        // ─────────────────────────────────────────────
-        // 📉 SIGNAL SHORT
-        // ✅ Fix : RSI actuel > 35 — évite contradiction
-        // ─────────────────────────────────────────────
+        // ── Signal SHORT ──────────────────────
         else if (
             rsiOverbought       &&
             rsi > 35            &&
@@ -715,6 +778,7 @@ bot.onText(/\/reset (.+)/, (msg, match) => {
         state[sym].activeTrade         = null;
         state[sym].tradeConfirmStatus  = "NONE";
         state[sym].lastMoveAlert       = null;
+        state[sym].lastEarlyAlert      = null;
         state[sym].cooldownUntil       = 0;
         saveState();
         send(`✅ *${sym}* débloqué — trading repris.`);
@@ -777,11 +841,11 @@ console.log("🤖 Bot Futures 1H lancé...");
 send(
 `🤖 *Bot Futures lancé — Timeframe 1H*
 
+✅ Alertes précoces — mouvement qui s'enclenche
+✅ Alertes mouvements brusques ±2%
 ✅ Fix contradiction LONG/SHORT
 ✅ Cooldown 30min après fermeture
-✅ Fix 409 — polling robuste
 ✅ Sauvegarde état automatique
-✅ Alertes mouvements brusques ±2%
 ✅ Confirmation tendance 2H
 ✅ TP +2.0% | SL -1.5% | R/R 1.3
 ✅ Boutons YES / NO interactifs
