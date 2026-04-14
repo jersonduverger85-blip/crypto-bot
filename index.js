@@ -7,8 +7,8 @@ const path   = require("path");
 // ─────────────────────────────────────────────
 // 🔑 CONFIG
 // ─────────────────────────────────────────────
-const TOKEN        = process.env.TELEGRAM_TOKEN;
-const ADMIN_CHAT_ID = process.env.TELEGRAM_CHAT_ID; // Ton ID = admin
+const TOKEN         = process.env.TELEGRAM_TOKEN;
+const ADMIN_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 if (!TOKEN || !ADMIN_CHAT_ID) {
     console.error("❌ TELEGRAM_TOKEN ou TELEGRAM_CHAT_ID manquant dans .env");
@@ -27,32 +27,85 @@ const bot = new TelegramBot(TOKEN, {
 });
 
 // ─────────────────────────────────────────────
-// 👥 GESTION MULTI-USERS
+// 👥 GESTION ABONNÉS AVEC EXPIRATION — ✅ NOUVEAU
 // ─────────────────────────────────────────────
 const USERS_FILE = path.join(__dirname, "users.json");
 
 function loadUsers() {
     try {
         if (fs.existsSync(USERS_FILE)) {
-            return JSON.parse(fs.readFileSync(USERS_FILE, "utf8"));
+            const data = JSON.parse(fs.readFileSync(USERS_FILE, "utf8"));
+            // Compatibilité ancien format tableau
+            if (Array.isArray(data)) {
+                const converted = {};
+                data.forEach(id => {
+                    converted[id] = { name: id === ADMIN_CHAT_ID ? "Admin" : "Abonné", expiry: null };
+                });
+                return converted;
+            }
+            return data;
         }
     } catch (e) {
         console.log("⚠️ Impossible de lire users.json");
     }
-    // Admin toujours présent par défaut
-    return [ADMIN_CHAT_ID];
+    const defaults = {};
+    defaults[ADMIN_CHAT_ID] = { name: "Admin", expiry: null };
+    return defaults;
 }
 
-function saveUsers(users) {
-    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+function saveUsers() {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(authorizedUsers, null, 2));
+}
+
+// ✅ Vérifie si un user est autorisé et non expiré
+function isAuthorized(chatId) {
+    const user = authorizedUsers[chatId];
+    if (!user) return false;
+    if (user.expiry === null) return true; // Admin — illimité
+    return Date.now() < user.expiry;
 }
 
 let authorizedUsers = loadUsers();
-// S'assurer que l'admin est toujours dedans
-if (!authorizedUsers.includes(ADMIN_CHAT_ID)) {
-    authorizedUsers.push(ADMIN_CHAT_ID);
-    saveUsers(authorizedUsers);
+
+// S'assurer que l'admin est toujours présent
+if (!authorizedUsers[ADMIN_CHAT_ID]) {
+    authorizedUsers[ADMIN_CHAT_ID] = { name: "Admin", expiry: null };
+    saveUsers();
 }
+
+// ✅ Vérification automatique des expirations — toutes les heures
+setInterval(async () => {
+    const now = Date.now();
+    let changed = false;
+    for (const [id, user] of Object.entries(authorizedUsers)) {
+        if (user.expiry !== null && now >= user.expiry) {
+            console.log(`⏰ User ${id} (${user.name}) expiré — retiré automatiquement`);
+            // Notifier l'abonné
+            try {
+                await bot.sendMessage(id,
+`⏰ *Ton accès CryptoSignal Bot a expiré*
+
+Ton abonnement de 30 jours est terminé.
+Contacte l'administrateur pour renouveler.`,
+                    { parse_mode: "Markdown" }
+                );
+            } catch (e) {}
+            // Notifier l'admin
+            await sendToAdmin(
+`⏰ *Abonnement expiré*
+
+Utilisateur: ${user.name}
+ID: \`${id}\`
+
+Abonnement terminé — retiré automatiquement.
+Pour renouveler: /adduser ${id} 30 ${user.name}`
+            );
+            delete authorizedUsers[id];
+            changed = true;
+        }
+    }
+    if (changed) saveUsers();
+}, 60 * 60 * 1000);
 
 // ─────────────────────────────────────────────
 // 💾 SAUVEGARDE D'ÉTAT
@@ -90,6 +143,7 @@ function saveState() {
                     tp:        st.activeTrade.tp,
                     sl:        st.activeTrade.sl,
                     reducedSL: st.activeTrade.reducedSL,
+                    lastAlert: st.activeTrade.lastAlert, // ✅ NOUVEAU — sauvegardé
                 } : null,
                 tradeConfirmStatus: st.activeTrade ? st.tradeConfirmStatus : "NONE",
             };
@@ -106,17 +160,17 @@ setInterval(saveState, 30000);
 // 📩 ENVOI MULTI-USERS
 // ─────────────────────────────────────────────
 async function send(msg) {
-    for (const chatId of authorizedUsers) {
+    for (const [chatId, user] of Object.entries(authorizedUsers)) {
+        if (!isAuthorized(chatId)) continue;
         try {
             await bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
         } catch (e) {
             console.error(`❌ Telegram [${chatId}]:`, e.message);
         }
     }
-    console.log(`📩 Envoyé à ${authorizedUsers.length} utilisateur(s)`);
+    console.log(`📩 Envoyé à ${Object.keys(authorizedUsers).length} utilisateur(s)`);
 }
 
-// Envoi seulement à l'admin (pour les réponses aux commandes admin)
 async function sendToAdmin(msg) {
     try {
         await bot.sendMessage(ADMIN_CHAT_ID, msg, { parse_mode: "Markdown" });
@@ -126,7 +180,8 @@ async function sendToAdmin(msg) {
 }
 
 async function sendWithButtons(msg, yesData, noData) {
-    for (const chatId of authorizedUsers) {
+    for (const [chatId] of Object.entries(authorizedUsers)) {
+        if (!isAuthorized(chatId)) continue;
         try {
             await bot.sendMessage(chatId, msg, {
                 parse_mode: "Markdown",
@@ -147,32 +202,31 @@ async function sendWithButtons(msg, yesData, noData) {
 // 🔥 PAIRES
 // ─────────────────────────────────────────────
 const symbols = [
-    { name: "ETHUSDT",  minVol: 20000,     sigVol: 25000     },
-    { name: "BTCUSDT",  minVol: 500,       sigVol: 600       },
-    { name: "SOLUSDT",  minVol: 20000,     sigVol: 25000     },
-    { name: "BNBUSDT",  minVol: 2000,      sigVol: 2400      },
-    { name: "XRPUSDT",  minVol: 500000,    sigVol: 600000    },
-    { name: "DOGEUSDT", minVol: 5000000,   sigVol: 6000000   },
-    { name: "ADAUSDT",  minVol: 1000000,   sigVol: 1200000   },
-    { name: "AVAXUSDT", minVol: 20000,     sigVol: 25000     },
-    { name: "LINKUSDT", minVol: 30000,     sigVol: 40000     },
-    { name: "DOTUSDT",  minVol: 100000,    sigVol: 120000    },
-    { name: "AAVEUSDT", minVol: 1000,      sigVol: 1200      },
-    { name: "ZECUSDT",  minVol: 10000,     sigVol: 12000     },
+    { name: "ETHUSDT",  minVol: 20000,   sigVol: 25000   },
+    { name: "BTCUSDT",  minVol: 500,     sigVol: 600     },
+    { name: "SOLUSDT",  minVol: 20000,   sigVol: 25000   },
+    { name: "BNBUSDT",  minVol: 2000,    sigVol: 2400    },
+    { name: "XRPUSDT",  minVol: 500000,  sigVol: 600000  },
+    { name: "DOGEUSDT", minVol: 5000000, sigVol: 6000000 },
+    { name: "ADAUSDT",  minVol: 1000000, sigVol: 1200000 },
+    { name: "AVAXUSDT", minVol: 20000,   sigVol: 25000   },
+    { name: "LINKUSDT", minVol: 30000,   sigVol: 40000   },
+    { name: "DOTUSDT",  minVol: 100000,  sigVol: 120000  },
+    { name: "AAVEUSDT", minVol: 1000,    sigVol: 1200    },
+    { name: "ZECUSDT",  minVol: 10000,   sigVol: 12000   },
 ];
 
 // ─────────────────────────────────────────────
-// ⚡ CONFIG — PARAMÈTRES ASSOUPLIS
+// ⚡ CONFIG
 // ─────────────────────────────────────────────
 const MOVE_THRESHOLD  = 0.02;
 const MOVE_CANDLES    = 2;
 const COOLDOWN_MS     = 30 * 60 * 1000;
-const RSI_WINDOW      = 5;      // ✅ Élargi 4→5 bougies
-const SCORE_MIN       = 50;     // ✅ Abaissé 55→50
-
-// RSI seuils assouplis
-const RSI_LONG_MAX  = 32;       // ✅ Assoupli 30→32
-const RSI_SHORT_MIN = 78;       // ✅ Assoupli 80→78
+const RSI_WINDOW      = 5;
+const SCORE_MIN       = 50;
+const RSI_LONG_MAX    = 32;
+const RSI_SHORT_MIN   = 78;
+const ALERT_DELAY_MS  = 10 * 60 * 1000; // ✅ NOUVEAU — 10 minutes entre alertes
 
 // ─────────────────────────────────────────────
 // 📡 API FUTURES
@@ -379,8 +433,7 @@ RSI: ${rsi.toFixed(1)} ${rsi > 80 ? "⚠️ Zone de retournement possible" : ""}
 // 🔘 BOUTONS YES / NO
 // ─────────────────────────────────────────────
 bot.on("callback_query", async (query) => {
-    // Accepter les boutons de tous les users autorisés
-    if (!authorizedUsers.includes(query.message.chat.id.toString())) return;
+    if (!isAuthorized(query.message.chat.id.toString())) return;
 
     const data   = query.data;
     const parts  = data.split("_");
@@ -428,6 +481,7 @@ Entrée: \`${trade.entry.toFixed(2)}\`
 
 // ─────────────────────────────────────────────
 // 🔄 GESTION DU TRADE EN COURS
+// ✅ CORRECTION 2 — Délai 10 minutes entre chaque alerte
 // ─────────────────────────────────────────────
 async function manageTrade(symbol, lastClose, rsi, macdData) {
     const s     = state[symbol];
@@ -451,6 +505,11 @@ async function manageTrade(symbol, lastClose, rsi, macdData) {
     const pnlStr    = pnlPct.toFixed(2);
     const pnl20xStr = (pnlPct * 20).toFixed(1);
 
+    // ✅ Délai 10 min — calculé ici une seule fois
+    const timeSinceLastAlert = Date.now() - (trade.lastAlert || 0);
+    const canAlert = timeSinceLastAlert >= ALERT_DELAY_MS;
+
+    // ── TP atteint — PAS de délai ─────────────
     if (
         (trade.type === "LONG"  && lastClose >= trade.tp) ||
         (trade.type === "SHORT" && lastClose <= trade.tp)
@@ -473,6 +532,7 @@ TP: \`${trade.tp.toFixed(2)}\`
         return;
     }
 
+    // ── SL atteint — PAS de délai ─────────────
     if (
         (trade.type === "LONG"  && lastClose <= trade.sl) ||
         (trade.type === "SHORT" && lastClose >= trade.sl)
@@ -503,8 +563,10 @@ SL: \`${trade.sl.toFixed(2)}\`
         ? (macdBear || rsi > 70)
         : (macdBull || rsi < 30);
 
-    if (shouldExit && s.tradeConfirmStatus !== "WAITING_EXIT") {
+    // ── Priorité 1 — EXIT ✅ avec délai 10min ─
+    if (canAlert && shouldExit && s.tradeConfirmStatus !== "WAITING_EXIT") {
         s.tradeConfirmStatus = "WAITING_EXIT";
+        trade.lastAlert      = Date.now(); // ✅ reset timer
         saveState();
         await sendWithButtons(
 `⚠️ *SORTIE RECOMMANDÉE — ${trade.type} ${symbol}*
@@ -522,9 +584,11 @@ ${trade.type === "LONG" ? "⚠️ MACD se retourne ou RSI > 70" : "⚠️ MACD s
         return;
     }
 
-    if (!trade.reducedSL && pnlPct >= 0.8) {
+    // ── Priorité 2 — SL RÉDUIT ✅ avec délai 10min ─
+    if (canAlert && !trade.reducedSL && pnlPct >= 0.8) {
         trade.sl        = trade.entry;
         trade.reducedSL = true;
+        trade.lastAlert = Date.now(); // ✅ reset timer
         saveState();
         await send(
 `🔒 *RÉDUIS TON SL — ${trade.type} ${symbol}*
@@ -537,13 +601,16 @@ Risque zéro — TP reste: \`${trade.tp.toFixed(2)}\``
         return;
     }
 
+    // ── Priorité 3 — HOLD ✅ avec délai 10min ─
     if (
-        macdStrong &&
-        !shouldExit &&
+        canAlert            &&
+        macdStrong          &&
+        !shouldExit         &&
         s.tradeConfirmStatus !== "WAITING_HOLD" &&
         s.tradeConfirmStatus !== "USER_CONFIRMED_HOLD"
     ) {
         s.tradeConfirmStatus = "WAITING_HOLD";
+        trade.lastAlert      = Date.now(); // ✅ reset timer
         saveState();
         await sendWithButtons(
 `✅ *TIENS LE ${trade.type} ${symbol}*
@@ -563,7 +630,8 @@ TP: \`${trade.tp.toFixed(2)}\` | SL: \`${trade.sl.toFixed(2)}\`
 }
 
 // ─────────────────────────────────────────────
-// 🔍 ANALYSE PRINCIPALE — CONDITIONS ASSOUPLIES
+// 🔍 ANALYSE PRINCIPALE
+// ✅ CORRECTION 1 — Bougie obligatoire pour signal
 // ─────────────────────────────────────────────
 async function analyze(symbolObj) {
     const { name: symbol, minVol, sigVol } = symbolObj;
@@ -606,19 +674,17 @@ async function analyze(symbolObj) {
         const signalCurr = macdData.signalLine.at(-1);
         const signalPrev = macdData.signalLine.at(-2);
 
-        // ✅ CROSSOVER exact (rare mais fort)
         const macdBullCross = macdCurr > signalCurr && macdPrev <= signalPrev;
         const macdBearCross = macdCurr < signalCurr && macdPrev >= signalPrev;
-
-        // ✅ POSITION MACD (plus souple — MACD au-dessus/dessous du signal)
-        const macdBullPos = macdCurr > signalCurr;
-        const macdBearPos = macdCurr < signalCurr;
+        const macdBullPos   = macdCurr > signalCurr;
+        const macdBearPos   = macdCurr < signalCurr;
 
         const ma7    = MA(closedCloses, 7);
         const ma25   = MA(closedCloses, 25);
         const ma99   = MA(closedCloses, 99);
         const avgVol = MA(closedVolumes, 10);
 
+        // ✅ CORRECTION 1 — Bougie calculée
         const bullishCandle = lastClose > lastOpen;
         const bearishCandle = lastClose < lastOpen;
 
@@ -651,24 +717,21 @@ async function analyze(symbolObj) {
         if (isRange)  { console.log(`⏸ ${symbol} — Range`);     return; }
         if (pumpDump) { console.log(`⏸ ${symbol} — Pump/dump`); return; }
 
-        // ── Fenêtre RSI élargie (5 bougies) ──
         const rsiOversold   = rsiWasBelow(closedCloses, RSI_LONG_MAX);
         const rsiOverbought = rsiWasAbove(closedCloses, RSI_SHORT_MIN);
 
-        // ── Tendance 2H ───────────────────────
         const trend2H = await getTrend2H(symbol);
 
         // ── Score ─────────────────────────────
-        // ✅ Bougie verte/rouge → bonus score (pas obligatoire)
         let score = 0;
         if      (rsi < 25 || rsi > 85) score += 30;
         else if (rsi < 30 || rsi > 80) score += 20;
-        else if (rsi < 32 || rsi > 78) score += 10; // ✅ Nouveau palier
-        if (macdBullCross || macdBearCross) score += 30; // crossover exact
-        else if (macdBullPos || macdBearPos) score += 15; // ✅ position favorable
-        if (lastVolume > avgVol * 1.5)  score += 20;
-        else if (lastVolume > avgVol)   score += 10;      // ✅ volume moyen aussi récompensé
-        if (bullishCandle || bearishCandle) score += 15;  // ✅ réduit de 20→15 (bonus, pas obligatoire)
+        else if (rsi < 32 || rsi > 78) score += 10;
+        if (macdBullCross || macdBearCross) score += 30;
+        else if (macdBullPos || macdBearPos) score += 15;
+        if (lastVolume > avgVol * 1.5) score += 20;
+        else if (lastVolume > avgVol)  score += 10;
+        if (bullishCandle || bearishCandle) score += 15;
         if (ma7 && ma25 && ma99) {
             if (ma7 > ma25 && ma25 > ma99) score += 10;
             if (ma7 < ma25 && ma25 < ma99) score += 10;
@@ -676,7 +739,7 @@ async function analyze(symbolObj) {
         if ((trend2H === "BULL" && rsiOversold) ||
             (trend2H === "BEAR" && rsiOverbought)) score += 10;
 
-        console.log(`\n🔍 ${symbol} [1H] | RSI: ${rsi.toFixed(1)} | Vol: ${Math.round(lastVolume)} | 2H: ${trend2H} | Score: ${score} | MACD: ${macdBullPos ? "BULL" : macdBearPos ? "BEAR" : "NEUTRE"}`);
+        console.log(`\n🔍 ${symbol} [1H] | RSI: ${rsi.toFixed(1)} | Vol: ${Math.round(lastVolume)} | 2H: ${trend2H} | Score: ${score} | MACD: ${macdBullPos ? "BULL" : macdBearPos ? "BEAR" : "NEUTRE"} | Bougie: ${bullishCandle ? "🟢" : bearishCandle ? "🔴" : "⚪"}`);
 
         // ── Alerte opportunité ────────────────
         if (score >= SCORE_MIN && !s.lastScoreAlert) {
@@ -697,18 +760,16 @@ MA7: ${ma7?.toFixed(2)} | MA25: ${ma25?.toFixed(2)} | MA99: ${ma99?.toFixed(2)}
         if (score < SCORE_MIN - 10) s.lastScoreAlert = false;
 
         // ─────────────────────────────────────────────
-        // 🚀 SIGNAL LONG — CONDITIONS ASSOUPLIES
-        // ✅ MACD position favorable suffit (pas obligatoirement crossover)
-        // ✅ Bougie verte = bonus score, non obligatoire
-        // ✅ RSI seuil élargi à 32
-        // ✅ Volume = sigVol (abaissé de 20%)
+        // 🚀 SIGNAL LONG
+        // ✅ CORRECTION 1 — bullishCandle OBLIGATOIRE
         // ─────────────────────────────────────────────
         if (
-            rsiOversold             &&
-            rsi < 65                &&
-            macdBullPos             && // ✅ position ou crossover
-            lastVolume > sigVol     &&
-            score >= SCORE_MIN      &&
+            rsiOversold         &&
+            rsi < 65            &&
+            macdBullPos         &&
+            lastVolume > sigVol &&
+            bullishCandle       && // ✅ Bougie VERTE obligatoire
+            score >= SCORE_MIN  &&
             trend2H !== "BEAR"
         ) {
             if (s.lastSignal !== "LONG") {
@@ -719,14 +780,22 @@ MA7: ${ma7?.toFixed(2)} | MA25: ${ma25?.toFixed(2)} | MA99: ${ma99?.toFixed(2)}
                 const tp    = entry * 1.020;
                 const sl    = entry * 0.985;
 
-                s.activeTrade = { type: "LONG", entry, tp, sl, reducedSL: false };
+                // ✅ CORRECTION 2 — lastAlert initialisé à l'entrée
+                s.activeTrade = {
+                    type:      "LONG",
+                    entry,
+                    tp,
+                    sl,
+                    reducedSL: false,
+                    lastAlert: Date.now()
+                };
                 saveState();
 
                 const macdLabel = macdBullCross ? "🔥 CROSSOVER HAUSSIER" : "✅ Position haussière";
 
                 await send(
 `🚀 *LONG ${symbol}* [Futures 20x]
-Bougie 1H fermée ✅
+Bougie 1H fermée ✅ | Bougie verte ✅
 
 Prix entrée: \`${entry.toFixed(2)}\`
 RSI 1H: ${rsi.toFixed(1)} | Score: ${score}%
@@ -739,20 +808,22 @@ MA7: ${ma7?.toFixed(2)} | MA25: ${ma25?.toFixed(2)} | MA99: ${ma99?.toFixed(2)}
 🛑 SL: \`${sl.toFixed(2)}\` (-1.5%)
 📐 R/R: 1.3
 
-_Le bot surveille et alertera avec boutons_`
+_Prochaine analyse dans 10 min_`
                 );
             }
         }
 
         // ─────────────────────────────────────────────
-        // 📉 SIGNAL SHORT — CONDITIONS ASSOUPLIES
+        // 📉 SIGNAL SHORT
+        // ✅ CORRECTION 1 — bearishCandle OBLIGATOIRE
         // ─────────────────────────────────────────────
         else if (
-            rsiOverbought           &&
-            rsi > 35                &&
-            macdBearPos             && // ✅ position ou crossover
-            lastVolume > sigVol     &&
-            score >= SCORE_MIN      &&
+            rsiOverbought       &&
+            rsi > 35            &&
+            macdBearPos         &&
+            lastVolume > sigVol &&
+            bearishCandle       && // ✅ Bougie ROUGE obligatoire
+            score >= SCORE_MIN  &&
             trend2H !== "BULL"
         ) {
             if (s.lastSignal !== "SHORT") {
@@ -763,14 +834,22 @@ _Le bot surveille et alertera avec boutons_`
                 const tp    = entry * 0.980;
                 const sl    = entry * 1.015;
 
-                s.activeTrade = { type: "SHORT", entry, tp, sl, reducedSL: false };
+                // ✅ CORRECTION 2 — lastAlert initialisé à l'entrée
+                s.activeTrade = {
+                    type:      "SHORT",
+                    entry,
+                    tp,
+                    sl,
+                    reducedSL: false,
+                    lastAlert: Date.now()
+                };
                 saveState();
 
                 const macdLabel = macdBearCross ? "🔥 CROSSOVER BAISSIER" : "✅ Position baissière";
 
                 await send(
 `📉 *SHORT ${symbol}* [Futures 20x]
-Bougie 1H fermée ✅
+Bougie 1H fermée ✅ | Bougie rouge ✅
 
 Prix entrée: \`${entry.toFixed(2)}\`
 RSI 1H: ${rsi.toFixed(1)} | Score: ${score}%
@@ -783,7 +862,7 @@ MA7: ${ma7?.toFixed(2)} | MA25: ${ma25?.toFixed(2)} | MA99: ${ma99?.toFixed(2)}
 🛑 SL: \`${sl.toFixed(2)}\` (+1.5%)
 📐 R/R: 1.3
 
-_Le bot surveille et alertera avec boutons_`
+_Prochaine analyse dans 10 min_`
                 );
             }
         } else {
@@ -806,28 +885,30 @@ function scan() {
 // 📣 COMMANDES TELEGRAM
 // ─────────────────────────────────────────────
 
-// ── /start — Nouveau user ─────────────────────
+// ── /start ────────────────────────────────────
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id.toString();
     const name   = msg.from.first_name || "Trader";
 
-    // Log l'ID pour que l'admin puisse l'ajouter
     console.log(`🆕 Nouveau /start — ID: ${chatId} | Nom: ${name}`);
 
-    if (authorizedUsers.includes(chatId)) {
+    if (isAuthorized(chatId)) {
+        const user = authorizedUsers[chatId];
+        const expiryInfo = user.expiry
+            ? `Abonnement valide jusqu'au ${new Date(user.expiry).toLocaleDateString("fr-FR")}`
+            : "Accès illimité 👑";
         await bot.sendMessage(chatId,
 `✅ *Bienvenue ${name} !*
 
-Tu es déjà autorisé sur CryptoSignal Bot.
-Le bot te notifiera automatiquement des signaux Futures.
+Tu es autorisé sur CryptoSignal Bot.
+${expiryInfo}
 
-Commandes disponibles: /status /help`,
+Commandes: /status /myplan /help`,
             { parse_mode: "Markdown" }
         );
         return;
     }
 
-    // Message à l'inconnu
     await bot.sendMessage(chatId,
 `👋 Bonjour ${name} !
 
@@ -837,54 +918,66 @@ Contacte l'administrateur pour obtenir l'accès.`,
         { parse_mode: "Markdown" }
     );
 
-    // Notifier l'admin
     await sendToAdmin(
 `🆕 *Nouvelle demande d'accès*
 
 Nom: ${name}
 ID: \`${chatId}\`
 
-Pour autoriser: /adduser ${chatId}
+Pour autoriser 30 jours: /adduser ${chatId} 30 ${name}
 Pour refuser: ignore simplement`
     );
 });
 
-// ── COMMANDES ADMIN UNIQUEMENT ────────────────
 function isAdmin(msg) {
     return msg.chat.id.toString() === ADMIN_CHAT_ID;
 }
 
-// /adduser — Ajouter un user
+// ── /adduser ID jours nom — ✅ AVEC EXPIRATION ─
 bot.onText(/\/adduser (.+)/, async (msg, match) => {
     if (!isAdmin(msg)) {
         await bot.sendMessage(msg.chat.id, "❌ Commande réservée à l'administrateur.");
         return;
     }
-    const newId = match[1].trim();
-    if (authorizedUsers.includes(newId)) {
-        await sendToAdmin(`⚠️ L'utilisateur \`${newId}\` est déjà autorisé.`);
-        return;
-    }
-    authorizedUsers.push(newId);
-    saveUsers(authorizedUsers);
-    await sendToAdmin(`✅ Utilisateur \`${newId}\` ajouté — ${authorizedUsers.length} user(s) actif(s).`);
-    // Notifier le nouvel user
+    const parts = match[1].trim().split(" ");
+    const newId = parts[0];
+    const days  = parseInt(parts[1]) || 30;
+    const name  = parts.slice(2).join(" ") || "Abonné";
+
+    const expiry     = Date.now() + days * 24 * 60 * 60 * 1000;
+    const expiryDate = new Date(expiry).toLocaleDateString("fr-FR");
+
+    const isRenewal = !!authorizedUsers[newId];
+
+    authorizedUsers[newId] = { name, expiry: newId === ADMIN_CHAT_ID ? null : expiry };
+    saveUsers();
+
+    await sendToAdmin(
+`${isRenewal ? "🔄 *Abonnement renouvelé*" : "✅ *Nouvel abonné ajouté*"}
+
+Utilisateur: ${name}
+ID: \`${newId}\`
+Durée: ${days} jours
+Expire le: ${expiryDate}`
+    );
+
     try {
         await bot.sendMessage(newId,
-`🎉 *Accès accordé !*
+`🎉 *${isRenewal ? "Abonnement renouvelé" : "Accès accordé"} — CryptoSignal Bot*
 
-Tu es maintenant autorisé sur CryptoSignal Bot.
+Bienvenue ${name} !
+Ton abonnement est valable *${days} jours* jusqu'au ${expiryDate}.
+
 Tu recevras tous les signaux Futures en temps réel.
-
-Commandes: /status /help`,
+Commandes: /status /myplan /help`,
             { parse_mode: "Markdown" }
         );
     } catch (e) {
-        await sendToAdmin(`⚠️ Impossible de notifier l'utilisateur \`${newId}\` — il doit d'abord envoyer /start au bot.`);
+        await sendToAdmin(`⚠️ Impossible de notifier \`${newId}\` — il doit d'abord envoyer /start au bot.`);
     }
 });
 
-// /removeuser — Retirer un user
+// ── /removeuser ───────────────────────────────
 bot.onText(/\/removeuser (.+)/, async (msg, match) => {
     if (!isAdmin(msg)) {
         await bot.sendMessage(msg.chat.id, "❌ Commande réservée à l'administrateur.");
@@ -895,27 +988,74 @@ bot.onText(/\/removeuser (.+)/, async (msg, match) => {
         await sendToAdmin("❌ Tu ne peux pas te retirer toi-même.");
         return;
     }
-    const before = authorizedUsers.length;
-    authorizedUsers = authorizedUsers.filter(id => id !== removeId);
-    saveUsers(authorizedUsers);
-    if (authorizedUsers.length < before) {
-        await sendToAdmin(`✅ Utilisateur \`${removeId}\` retiré — ${authorizedUsers.length} user(s) restant(s).`);
+    if (authorizedUsers[removeId]) {
+        const name = authorizedUsers[removeId].name;
+        delete authorizedUsers[removeId];
+        saveUsers();
+        await sendToAdmin(`✅ *${name}* (\`${removeId}\`) retiré — ${Object.keys(authorizedUsers).length} user(s) restant(s).`);
+        try {
+            await bot.sendMessage(removeId,
+`🔒 *Accès révoqué — CryptoSignal Bot*
+
+Ton accès a été retiré par l'administrateur.
+Contacte-le pour plus d'informations.`,
+                { parse_mode: "Markdown" }
+            );
+        } catch (e) {}
     } else {
         await sendToAdmin(`⚠️ ID \`${removeId}\` non trouvé dans la liste.`);
     }
 });
 
-// /users — Liste des users
+// ── /users — Liste avec jours restants ────────
 bot.onText(/\/users/, async (msg) => {
     if (!isAdmin(msg)) return;
-    let txt = `👥 *Utilisateurs autorisés (${authorizedUsers.length})*\n\n`;
-    authorizedUsers.forEach((id, i) => {
-        txt += `${i + 1}. \`${id}\`${id === ADMIN_CHAT_ID ? " 👑 Admin" : ""}\n`;
-    });
+    const now = Date.now();
+    let txt = `👥 *Abonnés actifs*\n\n`;
+    let count = 0;
+    for (const [id, user] of Object.entries(authorizedUsers)) {
+        const remaining = user.expiry
+            ? Math.ceil((user.expiry - now) / (24 * 60 * 60 * 1000))
+            : null;
+        const expiryDate = user.expiry
+            ? new Date(user.expiry).toLocaleDateString("fr-FR")
+            : null;
+        const status = user.expiry === null
+            ? "♾️ Admin"
+            : remaining > 0
+                ? `✅ ${remaining}j restants (expire le ${expiryDate})`
+                : "❌ Expiré";
+        txt += `• *${user.name}* — \`${id}\`\n  ${status}\n\n`;
+        count++;
+    }
+    txt += `Total: ${count} utilisateur(s)`;
     await sendToAdmin(txt);
 });
 
-// /reset — Débloquer une paire
+// ── /myplan — L'abonné voit son abonnement ────
+bot.onText(/\/myplan/, async (msg) => {
+    const chatId = msg.chat.id.toString();
+    if (!isAuthorized(chatId)) return;
+    const user = authorizedUsers[chatId];
+    if (!user.expiry) {
+        await bot.sendMessage(chatId, "👑 Tu es administrateur — accès illimité.", { parse_mode: "Markdown" });
+        return;
+    }
+    const remaining  = Math.ceil((user.expiry - Date.now()) / (24 * 60 * 60 * 1000));
+    const expiryDate = new Date(user.expiry).toLocaleDateString("fr-FR");
+    await bot.sendMessage(chatId,
+`📋 *Mon abonnement*
+
+Statut: ✅ Actif
+Jours restants: *${remaining} jours*
+Expire le: ${expiryDate}
+
+Pour renouveler contacte l'administrateur.`,
+        { parse_mode: "Markdown" }
+    );
+});
+
+// ── /reset ────────────────────────────────────
 bot.onText(/\/reset (.+)/, async (msg, match) => {
     if (!isAdmin(msg)) return;
     const sym = match[1].toUpperCase().trim();
@@ -935,7 +1075,7 @@ bot.onText(/\/reset (.+)/, async (msg, match) => {
     }
 });
 
-// /close — Fermer un trade
+// ── /close ────────────────────────────────────
 bot.onText(/\/close (.+)/, async (msg, match) => {
     if (!isAdmin(msg)) return;
     const sym = match[1].toUpperCase().trim();
@@ -952,9 +1092,9 @@ bot.onText(/\/close (.+)/, async (msg, match) => {
     }
 });
 
-// /status — Statut des paires (tous les users)
+// ── /status ───────────────────────────────────
 bot.onText(/\/status/, async (msg) => {
-    if (!authorizedUsers.includes(msg.chat.id.toString())) return;
+    if (!isAuthorized(msg.chat.id.toString())) return;
     let txt = "📊 *Statut des paires*\n\n";
     symbols.forEach(s => {
         const st         = state[s.name];
@@ -964,6 +1104,9 @@ bot.onText(/\/status/, async (msg) => {
             ? ` | ⏳ ${Math.round((st.cooldownUntil - Date.now()) / 60000)}min`
             : "";
         if (trade) {
+            const pnl = trade.type === "LONG"
+                ? ((trade.entry - trade.entry) / trade.entry * 100).toFixed(2)
+                : "...";
             txt += `🔵 *${s.name}* — ${trade.type} actif | Entrée: ${trade.entry.toFixed(2)}\n`;
         } else {
             txt += `${st.blocked ? "🛑" : inCooldown ? "⏳" : "✅"} *${s.name}* — Aucun trade | SL: ${st.consecutiveSL}/2${remaining}\n`;
@@ -972,13 +1115,13 @@ bot.onText(/\/status/, async (msg) => {
     await bot.sendMessage(msg.chat.id, txt, { parse_mode: "Markdown" });
 });
 
-// /help
+// ── /help ─────────────────────────────────────
 bot.onText(/\/help/, async (msg) => {
-    if (!authorizedUsers.includes(msg.chat.id.toString())) return;
-    const isAdminUser = isAdmin(msg);
-    let helpMsg = `🤖 *Commandes disponibles*\n\n/status — état de toutes les paires\n/help — cette aide`;
-    if (isAdminUser) {
-        helpMsg += `\n\n👑 *Commandes Admin*\n/adduser ID — ajouter un utilisateur\n/removeuser ID — retirer un utilisateur\n/users — liste des utilisateurs\n/reset SYMBOL — débloquer une paire\n/close SYMBOL — fermer un trade`;
+    if (!isAuthorized(msg.chat.id.toString())) return;
+    const adminUser = isAdmin(msg);
+    let helpMsg = `🤖 *Commandes disponibles*\n\n/status — état de toutes les paires\n/myplan — voir mon abonnement\n/help — cette aide`;
+    if (adminUser) {
+        helpMsg += `\n\n👑 *Commandes Admin*\n/adduser ID 30 Nom — ajouter un abonné (30 jours)\n/removeuser ID — retirer un abonné\n/users — liste avec jours restants\n/reset SYMBOL — débloquer une paire\n/close SYMBOL — fermer un trade`;
     }
     await bot.sendMessage(msg.chat.id, helpMsg, { parse_mode: "Markdown" });
 });
@@ -986,20 +1129,19 @@ bot.onText(/\/help/, async (msg) => {
 // ─────────────────────────────────────────────
 // 🚀 DÉMARRAGE
 // ─────────────────────────────────────────────
-console.log("🤖 Bot Futures 1H lancé...");
+console.log("🤖 Bot Futures 1H lancé — v2.1");
 send(
-`🤖 *Bot Futures lancé — v2.0*
+`🤖 *Bot Futures lancé — v2.1*
 
-✅ Système multi-utilisateurs actif
-✅ RSI fenêtre élargie à 5 bougies
-✅ MACD position favorable acceptée
-✅ Score minimum: ${SCORE_MIN}
+✅ Bougie verte/rouge obligatoire pour signal
+✅ Délai 10 min entre alertes HOLD/EXIT
+✅ Abonnements avec expiration automatique
+✅ RSI fenêtre 5 bougies | Score min: ${SCORE_MIN}
 ✅ RSI LONG < ${RSI_LONG_MAX} | SHORT > ${RSI_SHORT_MIN}
-✅ Alertes précoces & mouvements brusques
 ✅ Cooldown 30min | TP +2% | SL -1.5%
 ✅ 12 paires Futures scannées
 
-Commandes: /status /help`
+Commandes: /status /myplan /help`
 );
 
 scan();
