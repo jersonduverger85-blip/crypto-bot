@@ -870,6 +870,14 @@ async function manageTrade(symbol, lastClose, rsi, macdData) {
     const pnl20xStr = (pnlPct * 20).toFixed(1);
     const canAlert  = Date.now() - (trade.lastAlert || 0) >= ALERT_DELAY_MS;
 
+    // ✅ Reset statut toutes les 10min pour répéter les alertes
+	if (canAlert && s.tradeConfirmStatus === "WAITING_HOLD") {
+	    s.tradeConfirmStatus = "NONE";
+	}
+	if (canAlert && s.tradeConfirmStatus === "WAITING_EXIT") {
+	    s.tradeConfirmStatus = "NONE";
+	}	  	
+
     // TP
     if ((trade.type === "LONG" && lastClose >= trade.tp) || (trade.type === "SHORT" && lastClose <= trade.tp)) {
         await sendAll("tpHit", { type: trade.type, symbol, entry: trade.entry.toFixed(2), tp: trade.tp.toFixed(2), pnl20x: (2.0 * 20).toFixed(1) });
