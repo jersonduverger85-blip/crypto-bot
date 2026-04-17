@@ -1,8 +1,8 @@
 require("dotenv").config();
-const axios      = require("axios");
+const axios       = require("axios");
 const TelegramBot = require("node-telegram-bot-api");
-const fs         = require("fs");
-const path       = require("path");
+const fs          = require("fs");
+const path        = require("path");
 
 // ─────────────────────────────────────────────
 // 🔑 CONFIG
@@ -25,17 +25,16 @@ const bot = new TelegramBot(TOKEN, {
 
 // ─────────────────────────────────────────────
 // 🌐 TRADUCTIONS — FR / EN
-// Chaque clé = { fr: (params) => "...", en: (params) => "..." }
 // ─────────────────────────────────────────────
 const MSG = {
 
     botLaunched: {
         fr: (p) =>
-`🤖 *Bot Futures lancé — v2.2*
+`🤖 *Bot Futures lancé — v2.3*
 
-✅ Bougie verte/rouge obligatoire
-✅ Délai 10 min entre alertes HOLD/EXIT
-✅ Abonnements avec expiration automatique
+✅ Prix LIVE pour gestion trade (réaction < 15s)
+✅ HOLD/EXIT renvoyé toutes les 10 min
+✅ Bougie verte/rouge obligatoire pour signal
 ✅ Multilingue FR/EN actif
 ✅ RSI fenêtre 5 bougies | Score min: ${p.score}
 ✅ RSI LONG < ${p.rsiLong} | SHORT > ${p.rsiShort}
@@ -44,11 +43,11 @@ const MSG = {
 
 Commandes: /status /myplan /lang /help`,
         en: (p) =>
-`🤖 *Futures Bot launched — v2.2*
+`🤖 *Futures Bot launched — v2.3*
 
+✅ LIVE price for trade management (reaction < 15s)
+✅ HOLD/EXIT resent every 10 min
 ✅ Green/red candle required for signals
-✅ 10 min delay between HOLD/EXIT alerts
-✅ Subscriptions with auto-expiry
 ✅ Multilingual FR/EN active
 ✅ RSI window 5 candles | Min score: ${p.score}
 ✅ RSI LONG < ${p.rsiLong} | SHORT > ${p.rsiShort}
@@ -74,7 +73,7 @@ MA7: ${p.ma7} | MA25: ${p.ma25} | MA99: ${p.ma99}
 🛑 SL: \`${p.sl}\` (-1.5%)
 📐 R/R: 1.3
 
-_Prochaine analyse dans 10 min_`,
+_Surveillance live active — réaction < 15s_`,
         en: (p) =>
 `🚀 *LONG ${p.symbol}* [Futures 20x]
 1H candle closed ✅ | Green candle ✅
@@ -90,7 +89,7 @@ MA7: ${p.ma7} | MA25: ${p.ma25} | MA99: ${p.ma99}
 🛑 SL: \`${p.sl}\` (-1.5%)
 📐 R/R: 1.3
 
-_Next analysis in 10 min_`,
+_Live monitoring active — reaction < 15s_`,
     },
 
     signalShort: {
@@ -109,7 +108,7 @@ MA7: ${p.ma7} | MA25: ${p.ma25} | MA99: ${p.ma99}
 🛑 SL: \`${p.sl}\` (+1.5%)
 📐 R/R: 1.3
 
-_Prochaine analyse dans 10 min_`,
+_Surveillance live active — réaction < 15s_`,
         en: (p) =>
 `📉 *SHORT ${p.symbol}* [Futures 20x]
 1H candle closed ✅ | Red candle ✅
@@ -125,7 +124,7 @@ MA7: ${p.ma7} | MA25: ${p.ma25} | MA99: ${p.ma99}
 🛑 SL: \`${p.sl}\` (+1.5%)
 📐 R/R: 1.3
 
-_Next analysis in 10 min_`,
+_Live monitoring active — reaction < 15s_`,
     },
 
     tpHit: {
@@ -169,7 +168,7 @@ SL: \`${p.sl}\`
         fr: (p) =>
 `⚠️ *SORTIE RECOMMANDÉE — ${p.type} ${p.symbol}*
 
-Prix actuel: \`${p.price}\`
+Prix live: \`${p.price}\`
 Entrée: \`${p.entry}\`
 PnL estimé: ${p.pnl}% | ${p.pnl20x}% (20x)
 
@@ -179,7 +178,7 @@ ${p.reason}
         en: (p) =>
 `⚠️ *EXIT RECOMMENDED — ${p.type} ${p.symbol}*
 
-Current price: \`${p.price}\`
+Live price: \`${p.price}\`
 Entry: \`${p.entry}\`
 Estimated PnL: ${p.pnl}% | ${p.pnl20x}% (20x)
 
@@ -195,7 +194,7 @@ ${p.reason}
         fr: (p) =>
 `✅ *TIENS LE ${p.type} ${p.symbol}*
 
-Prix actuel: \`${p.price}\`
+Prix live: \`${p.price}\`
 Entrée: \`${p.entry}\`
 PnL estimé: ${p.pnl}% | ${p.pnl20x}% (20x)
 
@@ -206,7 +205,7 @@ TP: \`${p.tp}\` | SL: \`${p.sl}\`
         en: (p) =>
 `✅ *HOLD THE ${p.type} ${p.symbol}*
 
-Current price: \`${p.price}\`
+Live price: \`${p.price}\`
 Entry: \`${p.entry}\`
 Estimated PnL: ${p.pnl}% | ${p.pnl20x}% (20x)
 
@@ -234,10 +233,10 @@ Trade is in profit by +${p.pnl}%
 Zero risk — TP remains: \`${p.tp}\``,
     },
 
-    holdConfirmed:    { fr: (p) => `✅ *${p.symbol}* — Trade confirmé. Surveillance continue ! 👀`,      en: (p) => `✅ *${p.symbol}* — Trade confirmed. Monitoring continues! 👀`         },
-    tradeClosed:      { fr: (p) => `🔒 *${p.symbol}* — Trade fermé. Cooldown 30min.`,                    en: (p) => `🔒 *${p.symbol}* — Trade closed. 30min cooldown.`                    },
-    tradeClosedManual:{ fr: (p) => `🔒 *${p.symbol}* — Trade ${p.type} fermé.\nEntrée: \`${p.entry}\`\n👍 Bonne gestion !`, en: (p) => `🔒 *${p.symbol}* — ${p.type} trade closed.\nEntry: \`${p.entry}\`\n👍 Good management!` },
-    tradeKept:        { fr: (p) => `⚠️ *${p.symbol}* — Trade conservé. Attention au SL ! 👀`,           en: (p) => `⚠️ *${p.symbol}* — Trade kept. Watch your SL! 👀`                    },
+    holdConfirmed:     { fr: (p) => `✅ *${p.symbol}* — Trade confirmé. Surveillance continue ! 👀`,           en: (p) => `✅ *${p.symbol}* — Trade confirmed. Monitoring continues! 👀`      },
+    tradeClosed:       { fr: (p) => `🔒 *${p.symbol}* — Trade fermé. Cooldown 30min.`,                        en: (p) => `🔒 *${p.symbol}* — Trade closed. 30min cooldown.`                  },
+    tradeClosedManual: { fr: (p) => `🔒 *${p.symbol}* — Trade ${p.type} fermé.\nEntrée: \`${p.entry}\`\n👍 Bonne gestion !`, en: (p) => `🔒 *${p.symbol}* — ${p.type} trade closed.\nEntry: \`${p.entry}\`\n👍 Good management!` },
+    tradeKept:         { fr: (p) => `⚠️ *${p.symbol}* — Trade conservé. Attention au SL ! 👀`,               en: (p) => `⚠️ *${p.symbol}* — Trade kept. Watch your SL! 👀`                  },
 
     suddenDown: {
         fr: (p) =>
@@ -349,10 +348,10 @@ MA7: ${p.ma7} | MA25: ${p.ma25} | MA99: ${p.ma99}
     trendBearShort:    { fr: () => "🔴 BEAR",      en: () => "🔴 BEAR"     },
     trendNeutralShort: { fr: () => "⚪ NEUTRAL",   en: () => "⚪ NEUTRAL"   },
 
-    resetDone:   { fr: (p) => `✅ *${p.symbol}* débloqué — trading repris.`,   en: (p) => `✅ *${p.symbol}* unblocked — trading resumed.`  },
-    resetUnknown:{ fr: (p) => `❌ Symbole *${p.symbol}* inconnu.`,              en: (p) => `❌ Unknown symbol *${p.symbol}*.`               },
-    closeDone:   { fr: (p) => `🔒 *${p.symbol}* — Trade ${p.type} fermé manuellement. Cooldown 30min.`, en: (p) => `🔒 *${p.symbol}* — ${p.type} trade manually closed. 30min cooldown.` },
-    closeNone:   { fr: (p) => `❌ Aucun trade actif sur *${p.symbol}*.`,        en: (p) => `❌ No active trade on *${p.symbol}*.`           },
+    resetDone:    { fr: (p) => `✅ *${p.symbol}* débloqué — trading repris.`,                  en: (p) => `✅ *${p.symbol}* unblocked — trading resumed.`                },
+    resetUnknown: { fr: (p) => `❌ Symbole *${p.symbol}* inconnu.`,                            en: (p) => `❌ Unknown symbol *${p.symbol}*.`                            },
+    closeDone:    { fr: (p) => `🔒 *${p.symbol}* — Trade ${p.type} fermé. Cooldown 30min.`,   en: (p) => `🔒 *${p.symbol}* — ${p.type} trade closed. 30min cooldown.`  },
+    closeNone:    { fr: (p) => `❌ Aucun trade actif sur *${p.symbol}*.`,                      en: (p) => `❌ No active trade on *${p.symbol}*.`                        },
 
     startWelcome: {
         fr: (p) =>
@@ -376,8 +375,8 @@ Commands: /status /myplan /lang /help`,
         en: (p) => `👋 Hello ${p.name}!\n\nThis bot is private. Your Telegram ID is: \`${p.id}\`\n\nContact the administrator to get access.`,
     },
 
-    expiryUnlimited: { fr: () => "Accès illimité 👑",                       en: () => "Unlimited access 👑"                        },
-    expiryDate:      { fr: (p) => `Abonnement valide jusqu'au ${p.date}`,   en: (p) => `Subscription valid until ${p.date}`        },
+    expiryUnlimited: { fr: () => "Accès illimité 👑",                      en: () => "Unlimited access 👑"             },
+    expiryDate:      { fr: (p) => `Abonnement valide jusqu'au ${p.date}`,  en: (p) => `Subscription valid until ${p.date}` },
 
     userAdded: {
         fr: (p) => `${p.renewal ? "🔄 *Abonnement renouvelé*" : "✅ *Nouvel abonné ajouté*"}\n\nUtilisateur: ${p.name}\nID: \`${p.id}\`\nDurée: ${p.days} jours\nExpire le: ${p.date}`,
@@ -408,12 +407,12 @@ Commands: /status /myplan /lang /help${p.trialMsg}`,
         en: (p) => `\n\n🎁 *Free trial — ${p.days} days*\nAfter your trial, continue for only *10 USDT/month* and keep access to all signals 24h/24.`,
     },
 
-    cantNotify:    { fr: (p) => `⚠️ Impossible de notifier \`${p.id}\` — il doit d'abord envoyer /start.`, en: (p) => `⚠️ Unable to notify \`${p.id}\` — they must send /start first.` },
-    userRemoved:   { fr: (p) => `✅ *${p.name}* (\`${p.id}\`) retiré — ${p.total} user(s) restant(s).`,   en: (p) => `✅ *${p.name}* (\`${p.id}\`) removed — ${p.total} user(s) remaining.` },
-    userNotFound:  { fr: (p) => `⚠️ ID \`${p.id}\` non trouvé.`,                                          en: (p) => `⚠️ ID \`${p.id}\` not found.`                                        },
-    cantRemoveSelf:{ fr: () => "❌ Tu ne peux pas te retirer toi-même.",                                    en: () => "❌ You cannot remove yourself."                                        },
-    removeAllDone: { fr: (p) => `✅ ${p.count} abonné(s) retiré(s) — Seul toi reste.`,                    en: (p) => `✅ ${p.count} subscriber(s) removed — Only you remain.`               },
-    notAdmin:      { fr: () => "❌ Commande réservée à l'administrateur.",                                  en: () => "❌ Admin command only."                                                },
+    cantNotify:     { fr: (p) => `⚠️ Impossible de notifier \`${p.id}\` — il doit d'abord envoyer /start.`, en: (p) => `⚠️ Unable to notify \`${p.id}\` — they must send /start first.`  },
+    userRemoved:    { fr: (p) => `✅ *${p.name}* (\`${p.id}\`) retiré — ${p.total} user(s) restant(s).`,   en: (p) => `✅ *${p.name}* (\`${p.id}\`) removed — ${p.total} user(s) remaining.` },
+    userNotFound:   { fr: (p) => `⚠️ ID \`${p.id}\` non trouvé.`,                                          en: (p) => `⚠️ ID \`${p.id}\` not found.`                                         },
+    cantRemoveSelf: { fr: () => "❌ Tu ne peux pas te retirer toi-même.",                                    en: () => "❌ You cannot remove yourself."                                          },
+    removeAllDone:  { fr: (p) => `✅ ${p.count} abonné(s) retiré(s) — Seul toi reste.`,                    en: (p) => `✅ ${p.count} subscriber(s) removed — Only you remain.`                },
+    notAdmin:       { fr: () => "❌ Commande réservée à l'administrateur.",                                  en: () => "❌ Admin command only."                                                  },
 
     accessRevoked: {
         fr: () => `🔒 *Accès révoqué — CryptoSignal Bot*\n\nTon accès a été retiré par l'administrateur.\nContacte-le pour plus d'informations.`,
@@ -451,9 +450,9 @@ You've seen the quality of our real-time Futures signals.
         en: (p) => `👥 *Active subscribers*\n\n${p.list}Total: ${p.total} user(s)`,
     },
 
-    usersItemAdmin:   { fr: () => "♾️ Admin",    en: () => "♾️ Admin"   },
+    usersItemAdmin:   { fr: () => "♾️ Admin",   en: () => "♾️ Admin"   },
     usersItemActive:  { fr: (p) => `✅ ${p.days}j restants — expire le ${p.date}`, en: (p) => `✅ ${p.days} days left — expires ${p.date}` },
-    usersItemExpired: { fr: () => "❌ Expiré",    en: () => "❌ Expired"  },
+    usersItemExpired: { fr: () => "❌ Expiré",   en: () => "❌ Expired"  },
 
     myplanAdmin: {
         fr: () => "👑 Tu es administrateur — accès illimité.",
@@ -465,8 +464,8 @@ You've seen the quality of our real-time Futures signals.
     },
 
     statusHeader:      { fr: () => "📊 *Statut des paires*\n\n",      en: () => "📊 *Pairs status*\n\n"          },
-    statusActiveTrade: { fr: (p) => `🔵 *${p.symbol}* — ${p.type} actif | Entrée: ${p.entry}\n`,  en: (p) => `🔵 *${p.symbol}* — ${p.type} active | Entry: ${p.entry}\n`  },
-    statusNoTrade:     { fr: (p) => `${p.icon} *${p.symbol}* — Aucun trade | SL: ${p.sl}/2${p.cd}\n`, en: (p) => `${p.icon} *${p.symbol}* — No trade | SL: ${p.sl}/2${p.cd}\n` },
+    statusActiveTrade: { fr: (p) => `🔵 *${p.symbol}* — ${p.type} actif | Entrée: ${p.entry} | Live: ${p.live}\n`, en: (p) => `🔵 *${p.symbol}* — ${p.type} active | Entry: ${p.entry} | Live: ${p.live}\n` },
+    statusNoTrade:     { fr: (p) => `${p.icon} *${p.symbol}* — Aucun trade | SL: ${p.sl}/2${p.cd}\n`,             en: (p) => `${p.icon} *${p.symbol}* — No trade | SL: ${p.sl}/2${p.cd}\n`                  },
     cooldownLabel:     { fr: (p) => ` | ⏳ ${p.min}min`, en: (p) => ` | ⏳ ${p.min}min` },
 
     langChanged: { fr: () => "✅ Langue changée en *Français* 🇫🇷", en: () => "✅ Language changed to *English* 🇬🇧" },
@@ -513,14 +512,8 @@ function getLang(chatId) {
     return authorizedUsers[chatId]?.lang || "fr";
 }
 
-function getMsg(key, chatId, params = {}) {
-    const lang = getLang(chatId);
-    const fn   = MSG[key]?.[lang] || MSG[key]?.["fr"];
-    return fn ? fn(params) : `[${key}]`;
-}
-
 // ─────────────────────────────────────────────
-// 👥 GESTION ABONNÉS AVEC EXPIRATION
+// 👥 GESTION ABONNÉS
 // ─────────────────────────────────────────────
 const USERS_FILE = path.join(__dirname, "users.json");
 
@@ -569,9 +562,7 @@ setInterval(async () => {
     for (const [id, user] of Object.entries(authorizedUsers)) {
         if (user.expiry !== null && now >= user.expiry) {
             console.log(`⏰ Expiré: ${id} (${user.name})`);
-            try {
-                await bot.sendMessage(id, MSG.subscriptionExpired[user.lang || "fr"](), { parse_mode: "Markdown" });
-            } catch (e) {}
+            try { await bot.sendMessage(id, MSG.subscriptionExpired[user.lang || "fr"](), { parse_mode: "Markdown" }); } catch (e) {}
             await sendToAdmin(MSG.expiredAdminNotif["fr"]({ name: user.name, id }));
             delete authorizedUsers[id];
             changed = true;
@@ -605,7 +596,8 @@ function saveState() {
                 activeTrade: st.activeTrade ? {
                     type: st.activeTrade.type, entry: st.activeTrade.entry,
                     tp: st.activeTrade.tp, sl: st.activeTrade.sl,
-                    reducedSL: st.activeTrade.reducedSL, lastAlert: st.activeTrade.lastAlert,
+                    reducedSL: st.activeTrade.reducedSL,
+                    lastAlert: st.activeTrade.lastAlert,
                 } : null,
                 tradeConfirmStatus: st.activeTrade ? st.tradeConfirmStatus : "NONE",
             };
@@ -617,7 +609,7 @@ function saveState() {
 setInterval(saveState, 30000);
 
 // ─────────────────────────────────────────────
-// 📩 ENVOI — chaque user dans sa langue
+// 📩 ENVOI MULTI-USERS
 // ─────────────────────────────────────────────
 async function sendAll(msgKey, params = {}) {
     for (const [chatId, user] of Object.entries(authorizedUsers)) {
@@ -633,25 +625,6 @@ async function sendAll(msgKey, params = {}) {
 async function sendToAdmin(msg) {
     try { await bot.sendMessage(ADMIN_CHAT_ID, msg, { parse_mode: "Markdown" }); }
     catch (e) { console.error("❌ admin:", e.message); }
-}
-
-async function sendAllWithButtons(msgKey, paramsOrFn, yesData, noData) {
-    for (const [chatId, user] of Object.entries(authorizedUsers)) {
-        if (!isAuthorized(chatId)) continue;
-        const lang   = user.lang || "fr";
-        const params = typeof paramsOrFn === "function" ? paramsOrFn(lang) : paramsOrFn;
-        const fn     = MSG[msgKey]?.[lang] || MSG[msgKey]?.["fr"];
-        if (!fn) continue;
-        try {
-            await bot.sendMessage(chatId, fn(params), {
-                parse_mode: "Markdown",
-                reply_markup: { inline_keyboard: [[
-                    { text: "✅ YES", callback_data: yesData },
-                    { text: "❌ NO",  callback_data: noData  }
-                ]]}
-            });
-        } catch (e) { console.error(`❌ buttons [${chatId}]:`, e.message); }
-    }
 }
 
 // ─────────────────────────────────────────────
@@ -682,7 +655,7 @@ const RSI_WINDOW     = 5;
 const SCORE_MIN      = 50;
 const RSI_LONG_MAX   = 32;
 const RSI_SHORT_MIN  = 78;
-const ALERT_DELAY_MS = 10 * 60 * 1000;
+const ALERT_DELAY_MS = 10 * 60 * 1000; // 10 minutes entre alertes
 
 // ─────────────────────────────────────────────
 // 📡 API FUTURES
@@ -842,93 +815,157 @@ bot.on("callback_query", async (query) => {
     const s = state[symbol];
     await bot.answerCallbackQuery(query.id);
 
-    if (action === "HOLD" && choice === "YES") { s.tradeConfirmStatus = "USER_CONFIRMED_HOLD"; saveState(); await sendAll("holdConfirmed", { symbol }); }
-    if (action === "HOLD" && choice === "NO")  { s.activeTrade = null; s.lastSignal = null; s.tradeConfirmStatus = "CLOSED"; s.cooldownUntil = Date.now() + COOLDOWN_MS; saveState(); await sendAll("tradeClosed", { symbol }); }
+    if (action === "HOLD" && choice === "YES") {
+        s.tradeConfirmStatus = "USER_CONFIRMED_HOLD"; saveState();
+        await sendAll("holdConfirmed", { symbol });
+    }
+    if (action === "HOLD" && choice === "NO") {
+        s.activeTrade = null; s.lastSignal = null;
+        s.tradeConfirmStatus = "CLOSED";
+        s.cooldownUntil = Date.now() + COOLDOWN_MS; saveState();
+        await sendAll("tradeClosed", { symbol });
+    }
     if (action === "EXIT" && choice === "YES") {
         const trade = s.activeTrade;
         if (trade) await sendAll("tradeClosedManual", { symbol, type: trade.type, entry: trade.entry.toFixed(2) });
-        s.activeTrade = null; s.lastSignal = null; s.tradeConfirmStatus = "CLOSED"; s.cooldownUntil = Date.now() + COOLDOWN_MS; saveState();
+        s.activeTrade = null; s.lastSignal = null;
+        s.tradeConfirmStatus = "CLOSED";
+        s.cooldownUntil = Date.now() + COOLDOWN_MS; saveState();
     }
-    if (action === "EXIT" && choice === "NO")  { s.tradeConfirmStatus = "USER_CONFIRMED_HOLD"; saveState(); await sendAll("tradeKept", { symbol }); }
+    if (action === "EXIT" && choice === "NO") {
+        s.tradeConfirmStatus = "USER_CONFIRMED_HOLD"; saveState();
+        await sendAll("tradeKept", { symbol });
+    }
 });
 
 // ─────────────────────────────────────────────
-// 🔄 GESTION TRADE EN COURS
+// 🔄 GESTION TRADE — ✅ v2.3 PRIX LIVE
 // ─────────────────────────────────────────────
-async function manageTrade(symbol, lastClose, rsi, macdData) {
-    const s = state[symbol], trade = s.activeTrade;
+async function manageTrade(symbol, livePrice, liveRSI, liveMacd) {
+    const s     = state[symbol];
+    const trade = s.activeTrade;
     if (!trade) return;
 
-    const macdCurr = macdData.macdLine.at(-1), macdPrev = macdData.macdLine.at(-2);
-    const sigCurr  = macdData.signalLine.at(-1), sigPrev  = macdData.signalLine.at(-2);
+    const macdCurr = liveMacd.macdLine.at(-1);
+    const macdPrev = liveMacd.macdLine.at(-2);
+    const sigCurr  = liveMacd.signalLine.at(-1);
+    const sigPrev  = liveMacd.signalLine.at(-2);
+
     const macdBull   = macdCurr > sigCurr && macdPrev <= sigPrev;
     const macdBear   = macdCurr < sigCurr && macdPrev >= sigPrev;
     const macdStrong = trade.type === "LONG" ? macdCurr > sigCurr : macdCurr < sigCurr;
 
-    const pnlPct    = trade.type === "LONG" ? ((lastClose - trade.entry) / trade.entry * 100) : ((trade.entry - lastClose) / trade.entry * 100);
+    const pnlPct    = trade.type === "LONG"
+        ? ((livePrice - trade.entry) / trade.entry * 100)
+        : ((trade.entry - livePrice) / trade.entry * 100);
     const pnlStr    = (pnlPct >= 0 ? "+" : "") + pnlPct.toFixed(2);
     const pnl20xStr = (pnlPct * 20).toFixed(1);
-    const canAlert  = Date.now() - (trade.lastAlert || 0) >= ALERT_DELAY_MS;
 
-    // ✅ Reset statut toutes les 10min pour répéter les alertes
-	if (canAlert && s.tradeConfirmStatus === "WAITING_HOLD") {
-	    s.tradeConfirmStatus = "NONE";
-	}
-	if (canAlert && s.tradeConfirmStatus === "WAITING_EXIT") {
-	    s.tradeConfirmStatus = "NONE";
-	}	  	
+    // ✅ CORRECTION v2.3 — délai 10 min calculé une fois
+    const canAlert = Date.now() - (trade.lastAlert || 0) >= ALERT_DELAY_MS;
 
-    // TP
-    if ((trade.type === "LONG" && lastClose >= trade.tp) || (trade.type === "SHORT" && lastClose <= trade.tp)) {
+    // ── TP — PAS de délai, instantané ──────
+    if ((trade.type === "LONG" && livePrice >= trade.tp) || (trade.type === "SHORT" && livePrice <= trade.tp)) {
         await sendAll("tpHit", { type: trade.type, symbol, entry: trade.entry.toFixed(2), tp: trade.tp.toFixed(2), pnl20x: (2.0 * 20).toFixed(1) });
-        s.activeTrade = null; s.lastSignal = null; s.tradeConfirmStatus = "NONE"; s.consecutiveSL = 0; s.cooldownUntil = Date.now() + COOLDOWN_MS; saveState(); return;
+        s.activeTrade = null; s.lastSignal = null; s.tradeConfirmStatus = "NONE";
+        s.consecutiveSL = 0; s.cooldownUntil = Date.now() + COOLDOWN_MS; saveState();
+        return;
     }
-    // SL
-    if ((trade.type === "LONG" && lastClose <= trade.sl) || (trade.type === "SHORT" && lastClose >= trade.sl)) {
+
+    // ── SL — PAS de délai, instantané ──────
+    if ((trade.type === "LONG" && livePrice <= trade.sl) || (trade.type === "SHORT" && livePrice >= trade.sl)) {
         await sendAll("slHit", { type: trade.type, symbol, entry: trade.entry.toFixed(2), sl: trade.sl.toFixed(2), pnl20x: (1.5 * 20).toFixed(1) });
         s.consecutiveSL++;
         if (s.consecutiveSL >= 2) { s.blocked = true; await sendAll("blocked", { symbol }); }
-        s.activeTrade = null; s.lastSignal = null; s.tradeConfirmStatus = "NONE"; s.cooldownUntil = Date.now() + COOLDOWN_MS; saveState(); return;
+        s.activeTrade = null; s.lastSignal = null; s.tradeConfirmStatus = "NONE";
+        s.cooldownUntil = Date.now() + COOLDOWN_MS; saveState();
+        return;
     }
 
     if (s.tradeConfirmStatus === "CLOSED") return;
-    const shouldExit = trade.type === "LONG" ? (macdBear || rsi > 70) : (macdBull || rsi < 30);
 
-    // EXIT
+    const shouldExit = trade.type === "LONG"
+        ? (macdBear || liveRSI > 70)
+        : (macdBull || liveRSI < 30);
+
+    // ✅ CORRECTION v2.3 — Reset statut toutes les 10 min
+    // Permet de renvoyer HOLD ou EXIT régulièrement
+    if (canAlert && s.tradeConfirmStatus === "WAITING_EXIT") {
+        s.tradeConfirmStatus = "NONE";
+    }
+    if (canAlert && s.tradeConfirmStatus === "WAITING_HOLD") {
+        s.tradeConfirmStatus = "NONE";
+    }
+
+    // ── EXIT — toutes les 10 min si situation défavorable
     if (canAlert && shouldExit && s.tradeConfirmStatus !== "WAITING_EXIT") {
-        s.tradeConfirmStatus = "WAITING_EXIT"; trade.lastAlert = Date.now(); saveState();
+        s.tradeConfirmStatus = "WAITING_EXIT";
+        trade.lastAlert = Date.now(); saveState();
         for (const [chatId, user] of Object.entries(authorizedUsers)) {
             if (!isAuthorized(chatId)) continue;
             const lang   = user.lang || "fr";
             const reason = trade.type === "LONG" ? MSG.exitReasonLong[lang]() : MSG.exitReasonShort[lang]();
-            const msg    = MSG.exitRecommended[lang]({ type: trade.type, symbol, price: lastClose.toFixed(2), entry: trade.entry.toFixed(2), pnl: pnlStr, pnl20x: pnl20xStr, reason });
-            try { await bot.sendMessage(chatId, msg, { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[{ text: "✅ YES", callback_data: `EXIT_YES_${symbol}` }, { text: "❌ NO", callback_data: `EXIT_NO_${symbol}` }]] } }); } catch (e) {}
+            const msg    = MSG.exitRecommended[lang]({
+                type: trade.type, symbol,
+                price: livePrice.toFixed(2),
+                entry: trade.entry.toFixed(2),
+                pnl: pnlStr, pnl20x: pnl20xStr, reason
+            });
+            try {
+                await bot.sendMessage(chatId, msg, {
+                    parse_mode: "Markdown",
+                    reply_markup: { inline_keyboard: [[
+                        { text: "✅ YES", callback_data: `EXIT_YES_${symbol}` },
+                        { text: "❌ NO",  callback_data: `EXIT_NO_${symbol}`  }
+                    ]]}
+                });
+            } catch (e) {}
         }
         return;
     }
 
-    // REDUCE SL
+    // ── REDUCE SL — toutes les 10 min si profit >= 0.8%
     if (canAlert && !trade.reducedSL && pnlPct >= 0.8) {
-        trade.sl = trade.entry; trade.reducedSL = true; trade.lastAlert = Date.now(); saveState();
+        trade.sl = trade.entry; trade.reducedSL = true;
+        trade.lastAlert = Date.now(); saveState();
         await sendAll("reduceSL", { type: trade.type, symbol, pnl: pnlPct.toFixed(2), entry: trade.entry.toFixed(2), tp: trade.tp.toFixed(2) });
         return;
     }
 
-    // HOLD
-    if (canAlert && macdStrong && !shouldExit && s.tradeConfirmStatus !== "WAITING_HOLD" && s.tradeConfirmStatus !== "USER_CONFIRMED_HOLD") {
-        s.tradeConfirmStatus = "WAITING_HOLD"; trade.lastAlert = Date.now(); saveState();
+    // ── HOLD — toutes les 10 min si situation favorable
+    if (canAlert && macdStrong && !shouldExit &&
+        s.tradeConfirmStatus !== "WAITING_HOLD" &&
+        s.tradeConfirmStatus !== "USER_CONFIRMED_HOLD"
+    ) {
+        s.tradeConfirmStatus = "WAITING_HOLD";
+        trade.lastAlert = Date.now(); saveState();
         for (const [chatId, user] of Object.entries(authorizedUsers)) {
             if (!isAuthorized(chatId)) continue;
             const lang    = user.lang || "fr";
             const macdDir = trade.type === "LONG" ? MSG.macdBullDir[lang]() : MSG.macdBearDir[lang]();
-            const msg     = MSG.holdTrade[lang]({ type: trade.type, symbol, price: lastClose.toFixed(2), entry: trade.entry.toFixed(2), pnl: pnlStr, pnl20x: pnl20xStr, macdDir, tp: trade.tp.toFixed(2), sl: trade.sl.toFixed(2) });
-            try { await bot.sendMessage(chatId, msg, { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[{ text: "✅ YES", callback_data: `HOLD_YES_${symbol}` }, { text: "❌ NO", callback_data: `HOLD_NO_${symbol}` }]] } }); } catch (e) {}
+            const msg     = MSG.holdTrade[lang]({
+                type: trade.type, symbol,
+                price: livePrice.toFixed(2),
+                entry: trade.entry.toFixed(2),
+                pnl: pnlStr, pnl20x: pnl20xStr,
+                macdDir, tp: trade.tp.toFixed(2), sl: trade.sl.toFixed(2)
+            });
+            try {
+                await bot.sendMessage(chatId, msg, {
+                    parse_mode: "Markdown",
+                    reply_markup: { inline_keyboard: [[
+                        { text: "✅ YES", callback_data: `HOLD_YES_${symbol}` },
+                        { text: "❌ NO",  callback_data: `HOLD_NO_${symbol}`  }
+                    ]]}
+                });
+            } catch (e) {}
         }
     }
 }
 
 // ─────────────────────────────────────────────
 // 🔍 ANALYSE PRINCIPALE
+// ✅ v2.3 — SIGNAL sur bougie fermée, TRADE sur prix live
 // ─────────────────────────────────────────────
 async function analyze(symbolObj) {
     const { name: symbol, minVol, sigVol } = symbolObj;
@@ -944,18 +981,27 @@ async function analyze(symbolObj) {
         const lows    = candles.map(x => parseFloat(x[3]));
         const volumes = candles.map(x => parseFloat(x[5]));
 
+        // ✅ BOUGIE FERMÉE — pour les signaux d'entrée
         const closedCloses  = closes.slice(0, -1);
         const closedVolumes = volumes.slice(0, -1);
         const closedHighs   = highs.slice(0, -1);
         const closedLows    = lows.slice(0, -1);
-        const lastClose     = closes.at(-2);
+        const lastClose     = closes.at(-2);  // bougie 1H fermée
         const lastOpen      = opens.at(-2);
         const lastVolume    = volumes.at(-2);
 
+        // ✅ PRIX LIVE — pour la gestion du trade (réaction < 15s)
+        const livePrice = closes.at(-1);      // prix en temps réel
+        const liveRSI   = RSI(closes, 6);     // RSI live
+        const liveMacd  = MACD(closes);       // MACD live
+
         const rsi      = RSI(closedCloses, 6);
         const macdData = MACD(closedCloses);
-        const macdCurr = macdData.macdLine.at(-1), macdPrev = macdData.macdLine.at(-2);
-        const signalCurr = macdData.signalLine.at(-1), signalPrev = macdData.signalLine.at(-2);
+
+        const macdCurr   = macdData.macdLine.at(-1);
+        const macdPrev   = macdData.macdLine.at(-2);
+        const signalCurr = macdData.signalLine.at(-1);
+        const signalPrev = macdData.signalLine.at(-2);
 
         const macdBullCross = macdCurr > signalCurr && macdPrev <= signalPrev;
         const macdBearCross = macdCurr < signalCurr && macdPrev >= signalPrev;
@@ -967,21 +1013,27 @@ async function analyze(symbolObj) {
         const bullishCandle = lastClose > lastOpen;
         const bearishCandle = lastClose < lastOpen;
 
+        // Alertes sur données fermées
         await checkSuddenMove(symbol, closedCloses, rsi);
         await checkEarlyAlert(symbol, closedCloses, rsi, macdData, lastClose);
 
-        if (s.activeTrade) { await manageTrade(symbol, lastClose, rsi, macdData); return; }
+        // ✅ TRADE ACTIF → gestion sur PRIX LIVE
+        if (s.activeTrade) {
+            await manageTrade(symbol, livePrice, liveRSI, liveMacd);
+            return;
+        }
 
+        // ── Filtres marché (bougie fermée) ────
         const range20High = Math.max(...closedHighs.slice(-20));
         const range20Low  = Math.min(...closedLows.slice(-20));
         const isRange     = (range20High - range20Low) / lastClose < 0.004;
         const move5       = (closedCloses.at(-1) - closedCloses.at(-5)) / closedCloses.at(-5);
         const pumpDump    = Math.abs(move5) > 0.03;
 
-        if (lastVolume < minVol)          { console.log(`⏸ ${symbol} — Volume faible`); return; }
-        if (rsi > 36 && rsi < 64)        { console.log(`⏸ ${symbol} — RSI neutre (${rsi.toFixed(1)})`); return; }
-        if (isRange)                       { console.log(`⏸ ${symbol} — Range`); return; }
-        if (pumpDump)                      { console.log(`⏸ ${symbol} — Pump/dump`); return; }
+        if (lastVolume < minVol)    { console.log(`⏸ ${symbol} — Volume faible`);               return; }
+        if (rsi > 36 && rsi < 64)  { console.log(`⏸ ${symbol} — RSI neutre (${rsi.toFixed(1)})`); return; }
+        if (isRange)                 { console.log(`⏸ ${symbol} — Range`);                        return; }
+        if (pumpDump)                { console.log(`⏸ ${symbol} — Pump/dump`);                    return; }
 
         const rsiOversold   = rsiWasBelow(closedCloses, RSI_LONG_MAX);
         const rsiOverbought = rsiWasAbove(closedCloses, RSI_SHORT_MIN);
@@ -1002,9 +1054,9 @@ async function analyze(symbolObj) {
         }
         if ((trend2H === "BULL" && rsiOversold) || (trend2H === "BEAR" && rsiOverbought)) score += 10;
 
-        console.log(`\n🔍 ${symbol} | RSI: ${rsi.toFixed(1)} | Vol: ${Math.round(lastVolume)} | 2H: ${trend2H} | Score: ${score} | MACD: ${macdBullPos ? "BULL" : macdBearPos ? "BEAR" : "NEU"} | ${bullishCandle ? "🟢" : bearishCandle ? "🔴" : "⚪"}`);
+        console.log(`\n🔍 ${symbol} | Fermée: ${lastClose.toFixed(2)} | Live: ${livePrice.toFixed(2)} | RSI: ${rsi.toFixed(1)} | Score: ${score} | ${bullishCandle ? "🟢" : bearishCandle ? "🔴" : "⚪"}`);
 
-        // Opportunité — par user dans sa langue
+        // ── Opportunité ────────────────────
         if (score >= SCORE_MIN && !s.lastScoreAlert) {
             s.lastScoreAlert = true; saveState();
             for (const [chatId, user] of Object.entries(authorizedUsers)) {
@@ -1022,8 +1074,9 @@ async function analyze(symbolObj) {
         }
         if (score < SCORE_MIN - 10) s.lastScoreAlert = false;
 
-        // ── SIGNAL LONG ──────────────────────
-        if (rsiOversold && rsi < 65 && macdBullPos && lastVolume > sigVol && bullishCandle && score >= SCORE_MIN && trend2H !== "BEAR") {
+        // ── SIGNAL LONG — bougie fermée ✅ ──
+        if (rsiOversold && rsi < 65 && macdBullPos && lastVolume > sigVol &&
+            bullishCandle && score >= SCORE_MIN && trend2H !== "BEAR") {
             if (s.lastSignal !== "LONG") {
                 s.lastSignal = "LONG"; s.tradeConfirmStatus = "NONE";
                 const entry = lastClose, tp = entry * 1.020, sl = entry * 0.985;
@@ -1045,8 +1098,9 @@ async function analyze(symbolObj) {
                 }
             }
         }
-        // ── SIGNAL SHORT ─────────────────────
-        else if (rsiOverbought && rsi > 35 && macdBearPos && lastVolume > sigVol && bearishCandle && score >= SCORE_MIN && trend2H !== "BULL") {
+        // ── SIGNAL SHORT — bougie fermée ✅ ─
+        else if (rsiOverbought && rsi > 35 && macdBearPos && lastVolume > sigVol &&
+                 bearishCandle && score >= SCORE_MIN && trend2H !== "BULL") {
             if (s.lastSignal !== "SHORT") {
                 s.lastSignal = "SHORT"; s.tradeConfirmStatus = "NONE";
                 const entry = lastClose, tp = entry * 0.980, sl = entry * 1.015;
@@ -1075,7 +1129,7 @@ async function analyze(symbolObj) {
 }
 
 // ─────────────────────────────────────────────
-// 🔁 SCAN
+// 🔁 SCAN — toutes les 15 secondes
 // ─────────────────────────────────────────────
 function scan() { symbols.forEach(analyze); }
 
@@ -1088,10 +1142,11 @@ bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id.toString();
     const name   = msg.from.first_name || "Trader";
     console.log(`🆕 /start — ID: ${chatId} | ${name}`);
-
     if (isAuthorized(chatId)) {
         const user = authorizedUsers[chatId], lang = user.lang || "fr";
-        const expiryStr = user.expiry ? MSG.expiryDate[lang]({ date: new Date(user.expiry).toLocaleDateString("fr-FR") }) : MSG.expiryUnlimited[lang]();
+        const expiryStr = user.expiry
+            ? MSG.expiryDate[lang]({ date: new Date(user.expiry).toLocaleDateString("fr-FR") })
+            : MSG.expiryUnlimited[lang]();
         await bot.sendMessage(chatId, MSG.startWelcome[lang]({ name, expiry: expiryStr }), { parse_mode: "Markdown" });
         return;
     }
@@ -1100,7 +1155,7 @@ bot.onText(/\/start/, async (msg) => {
 });
 
 bot.onText(/\/lang (.+)/, async (msg, match) => {
-    const chatId  = msg.chat.id.toString();
+    const chatId = msg.chat.id.toString();
     if (!isAuthorized(chatId)) return;
     const newLang = match[1].trim().toLowerCase();
     if (newLang !== "fr" && newLang !== "en") {
@@ -1114,7 +1169,7 @@ bot.onText(/\/adduser (.+)/, async (msg, match) => {
     if (!isAdmin(msg)) { await bot.sendMessage(msg.chat.id, MSG.notAdmin["fr"]()); return; }
     const parts = match[1].trim().split(" ");
     const newId = parts[0], days = parseInt(parts[1]) || 30, name = parts.slice(2).join(" ") || "Abonné";
-    const expiry = Date.now() + days * 24 * 60 * 60 * 1000;
+    const expiry     = Date.now() + days * 24 * 60 * 60 * 1000;
     const expiryDate = new Date(expiry).toLocaleDateString("fr-FR");
     const isRenewal  = !!authorizedUsers[newId];
     const prevLang   = authorizedUsers[newId]?.lang || "fr";
@@ -1157,7 +1212,9 @@ bot.onText(/\/users/, async (msg) => {
     for (const [id, user] of Object.entries(authorizedUsers)) {
         const remaining = user.expiry ? Math.ceil((user.expiry - now) / 86400000) : null;
         const date      = user.expiry ? new Date(user.expiry).toLocaleDateString("fr-FR") : null;
-        const status    = user.expiry === null ? MSG.usersItemAdmin["fr"]() : remaining > 0 ? MSG.usersItemActive["fr"]({ days: remaining, date }) : MSG.usersItemExpired["fr"]();
+        const status    = user.expiry === null ? MSG.usersItemAdmin["fr"]()
+            : remaining > 0 ? MSG.usersItemActive["fr"]({ days: remaining, date })
+            : MSG.usersItemExpired["fr"]();
         list += `• *${user.name}* — \`${id}\` [${user.lang || "fr"}]\n  ${status}\n\n`;
     }
     await sendToAdmin(MSG.usersList["fr"]({ list, total: Object.keys(authorizedUsers).length }));
@@ -1200,8 +1257,11 @@ bot.onText(/\/status/, async (msg) => {
     symbols.forEach(s => {
         const st = state[s.name], trade = st.activeTrade, inCD = Date.now() < st.cooldownUntil;
         const cd = inCD ? MSG.cooldownLabel[lang]({ min: Math.round((st.cooldownUntil - Date.now()) / 60000) }) : "";
-        if (trade) txt += MSG.statusActiveTrade[lang]({ symbol: s.name, type: trade.type, entry: trade.entry.toFixed(2) });
-        else txt += MSG.statusNoTrade[lang]({ icon: st.blocked ? "🛑" : inCD ? "⏳" : "✅", symbol: s.name, sl: st.consecutiveSL, cd });
+        if (trade) {
+            txt += MSG.statusActiveTrade[lang]({ symbol: s.name, type: trade.type, entry: trade.entry.toFixed(2), live: "live ✅" });
+        } else {
+            txt += MSG.statusNoTrade[lang]({ icon: st.blocked ? "🛑" : inCD ? "⏳" : "✅", symbol: s.name, sl: st.consecutiveSL, cd });
+        }
     });
     await bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
 });
@@ -1215,11 +1275,14 @@ bot.onText(/\/help/, async (msg) => {
 // ─────────────────────────────────────────────
 // 🚀 DÉMARRAGE
 // ─────────────────────────────────────────────
-console.log("🤖 Bot v2.2 — Multilingue FR/EN");
+console.log("🤖 Bot v2.3 — Prix LIVE + HOLD/EXIT toutes les 10 min");
 sendAll("botLaunched", { score: SCORE_MIN, rsiLong: RSI_LONG_MAX, rsiShort: RSI_SHORT_MIN });
 scan();
 setInterval(scan, 15000);
 
-async function shutdown() { console.log("🛑 Arrêt..."); saveState(); setTimeout(() => process.exit(0), 500); }
+async function shutdown() {
+    console.log("🛑 Arrêt..."); saveState();
+    setTimeout(() => process.exit(0), 500);
+}
 process.on("SIGINT",  shutdown);
 process.on("SIGTERM", shutdown);
